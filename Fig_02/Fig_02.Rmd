@@ -1,0 +1,136 @@
+---
+title: "Fig_02"
+author: "Benjamin Ostendorf"
+date: '2022-08-08'
+output: rmarkdown::github_document
+---
+
+## Preamble
+```{r, message=FALSE, warning=FALSE}
+library(ggpubr)
+library(coin)
+library(tidyverse)
+
+source("../auxiliary/helper_functions.R")
+knitr::opts_chunk$set(fig.retina = 3)
+```
+
+## Fig 2a, ED Fig 2a
+```{r}
+## --------------------------------------------
+## Fig 2a
+## --------------------------------------------
+df_taqman_d4 <- read_tsv("../data/taqman_d4.tsv")
+df_taqman_d4 |>
+  ggplot(aes(x = genotype, y = ct_norm, fill = genotype)) +
+  geom_boxplot(outlier.shape = NA) +
+  ggbeeswarm::geom_quasirandom(size = 0.75, alpha = 0.6, shape = 21, 
+                               color = "white", fill = "black", stroke = 0.2) +
+  ggpubr::stat_compare_means(method = "wilcox.test", comparisons = APOE_contrasts, 
+                             size = 1.75, label.y = c(2.8, 2.8, 3.5)) +
+  scale_fill_manual(values = pal_APOE) +
+  scale_y_continuous(trans = "log2") +
+  lemon::coord_capped_cart(left = "both", bottom = "both") +
+  theme_custom2 +
+  guides(x = guide_axis(angle = 60)) +
+  expand_limits(y = c(0, 16)) +
+  labs(title = "CoV-2 N1", 
+       y = expression(paste("Expression (relative to ", italic("APOE3"), ")")), 
+       x = "Genotype") +
+  theme(legend.position = "none", 
+        axis.text.x = element_text(face = "italic"))
+
+
+## --------------------------------------------
+## ED Fig 2a
+## --------------------------------------------
+df_taqman_d2 <- read_tsv("../data/taqman_d2.tsv")
+df_taqman_d2 |>
+  ggplot(aes(x = genotype, y = ct_norm, fill = genotype)) +
+  geom_boxplot(outlier.shape = NA) +
+  ggbeeswarm::geom_quasirandom(size = 0.75, alpha = 0.6, shape = 21, 
+                               color = "white", fill = "black", stroke = 0.2) +
+  ggpubr::stat_compare_means(method = "wilcox.test", 
+                             comparisons = APOE_contrasts_small, 
+                             method.args = list(alternative = "greater"), 
+                             size = 1.75, label.y = c(2.2, 2.2, 2.5)) +
+  scale_fill_manual(values = pal_APOE) +
+  lemon::coord_capped_cart(left = "both", bottom = "both") +
+  theme_custom2 +
+  guides(x = guide_axis(angle = 60)) +
+  expand_limits(y = c(0, 2.5)) +
+  labs(title = "CoV-2 N1", 
+       y = expression(paste("Expression (relative to ", italic("APOE3"), ")")), 
+       x = "Genotype") +
+  theme(legend.position = "none", 
+        axis.text.x = element_text(face = "italic"))
+```
+
+## Fig 2b
+```{r}
+df_IF <- read_tsv("../data/immunofluorescence.tsv")
+
+IF_plot(df_IF, x = "genotype", y = "area_N1", fill = "genotype", 
+        expand_limits = c(0, 0.4), label.y = c(0.35, 0.35, 0.385), 
+        ylab = "Positive area (%)", title = "CoV-2 N1")
+```
+
+## Fig 2c-f, ED Fig 2b-h
+```{r}
+df_path <- read_tsv("../data/histopath.tsv")
+
+## ---------------------------------------
+## Fig 2c-e, ED Fig 2c-h
+## ---------------------------------------
+## Select variables
+outcome_vars <- colnames(df_path)[c(2:11)]
+
+## Plot
+for (v in outcome_vars) {
+  
+  label.y_coordinates <- c(rep(max(as.numeric(df_path[[v]])) * 1.05, 2), max(as.numeric(df_path[[v]])) * 1.15)
+  
+  p_variable <-
+    df_path |>
+    mutate(across(!c(genotype), as.numeric)) |>
+    ggplot(aes_string(x = "genotype", fill = "genotype", y = v)) +
+    geom_violin(size = custom_linewidth) +
+    ggbeeswarm::geom_quasirandom(size = 0.75, alpha = 0.6, shape = 21, 
+                               color = "white", fill = "black", stroke = 0.2) +
+    stat_compare_means(method = "wilcox.test", comparisons = APOE_contrasts,
+                       label = "p.format", size = 1.75, label.y = label.y_coordinates
+                       ) +
+    scale_fill_manual(values = pal_APOE) +
+    guides(x = guide_axis(angle = 60)) +
+    expand_limits(y = c(0, max(as.numeric(df_path[[v]])) * 1.3)) +
+    labs(title = str_to_sentence(gsub("_", " ", v)), y = "Score", x = "Genotype") +
+    theme_custom2  +
+    theme(legend.position = "none", 
+          title = element_text(size = 7), 
+          axis.text.x = element_text(face = "italic")) +
+    lemon::coord_capped_cart(left = "both", bottom = "both")
+    print(p_variable)
+}
+
+## ---------------------------------------
+## ED Fig 2b
+## ---------------------------------------
+p_hemorrhage_bars <-
+  df_path |>
+  mutate(across(!c(genotype), as.factor)) |>
+  ggplot(aes(x = genotype, fill = hemorrhage)) +
+  geom_bar(position = "fill", width = 0.7) +
+  scale_fill_manual(values = RColorBrewer::brewer.pal(6, "Set2")[1:2]) +
+  guides(x = guide_axis(angle = 60)) +
+  labs(title = "Hemorrhage", y = "Fraction", x = "Genotype") +
+  theme_custom2  +
+  theme(title = element_text(size = 7), 
+        axis.text.x = element_text(face = "italic")) +
+  lemon::coord_capped_cart(left = "both", bottom = "both")
+plot(p_hemorrhage_bars)
+```
+
+## Session info
+```{r}
+devtools::session_info()
+```

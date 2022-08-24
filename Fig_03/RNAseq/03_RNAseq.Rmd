@@ -1,0 +1,240 @@
+---
+title: "Validation cohort #2 (young female mice) for dissociated lungs in APOE-knock-in mice"
+author: "Benjamin Ostendorf"
+date: 2022-08-08
+output: rmarkdown::github_document
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+library(DESeq2)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(WGCNA)
+library(tidyverse)
+
+source("../../auxiliary/helper_functions.R")
+knitr::opts_chunk$set(fig.retina = 3)
+
+## Set ComplexHeatmap options
+ht_opt("heatmap_row_names_gp" = gpar(fontsize = 5), 
+       "heatmap_column_names_gp" = gpar(fontsize = 5), 
+       "heatmap_row_title_gp" = gpar(fontsize = 6), 
+       "heatmap_column_title_gp" = gpar(fontsize = 7), 
+       "legend_title_gp" = gpar(fontsize = 6), 
+       "legend_labels_gp" = gpar(fontsize = 5), 
+       "legend_grid_height" = unit(2, "mm"), 
+       "legend_grid_width" = unit(2, "mm"))
+```
+
+## Import data
+A DESeq2 object for import can be found [here](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE200132).  
+Place it into `../../data/RNAseq`. 
+```{r}
+## ----------------------------------------
+## Prepare data for WGCNA
+## ----------------------------------------
+dds <- readRDS("../../data/RNAseq/dds_GSE200132.rds")
+metadata <- data.frame(genotype = dds$condition, 
+                       sample = colnames(dds))
+
+## Get log2-transformed and scaled gene expression data
+counts_norm <- counts(dds, normalized = TRUE)
+counts_log2 <- log2(counts_norm + 1)
+counts_scaled <- t(scale(t(counts_log2)))
+
+## Get variance stabilized expression as input for WGCNA as recommended by package authors
+df_vsd <- getVarianceStabilizedData(dds)
+df_rv <- rowVars(df_vsd)
+
+## Get top 30% variable genes
+q70_cutoff <- quantile(rowVars(df_vsd), 0.7)
+expr_normalized <- df_vsd[df_rv > q70_cutoff, ]
+
+expr_normalized_df <- 
+  data.frame(expr_normalized) |>
+  mutate(Gene_id = row.names(expr_normalized)) |>
+  pivot_longer(-Gene_id)
+
+## Transpose for WGCNA
+input_mat <- t(expr_normalized)
+```
+
+## Calculate score of eigengenes as defined in GSE184287
+```{r}
+## Get input matrix for manual calculation of eigengenes as defined in batch 01
+expr_normalized_df_allquartiles <- 
+  data.frame(df_vsd) |>
+  mutate(Gene_id = row.names(df_vsd)) |>
+  pivot_longer(-Gene_id)
+
+## Transpose for WGCNA
+input_mat_all_quartiles <- t(df_vsd)
+
+gene_modules <-  read_tsv("../../data/RNAseq/gene_modules.txt")
+gene_modules_sorted <-  
+  tibble(gene_id = colnames(input_mat_all_quartiles)) |>
+  left_join(gene_modules)
+gene_modules_sorted$colors[is.na(gene_modules_sorted$colors)] <- "grey"
+  
+colnames(input_mat_all_quartiles)[which(gene_modules_sorted$colors == "greenyellow")]
+MEs <- moduleEigengenes(input_mat_all_quartiles,
+                        colors = gene_modules_sorted$colors)
+
+MEs_df <- 
+  tibble(sample = rownames(input_mat_all_quartiles),
+         black = MEs$eigengenes$MEblack, 
+         greenyellow = MEs$eigengenes$MEgreenyellow,
+         midnightblue = MEs$eigengenes$MEmidnightblue, 
+         pink = MEs$eigengenes$MEpink, 
+         yellow = MEs$eigengenes$MEyellow) |>
+  full_join(metadata)
+```
+
+## Assess significance of module difference across conditions (using MEs as defined in GSE184287)
+```{r}
+## the following assess the Pearson correlation between module eigengenes and traits, as encoded by APOE(APOE3 = 1, APOE2 = 3.51, APOE4 = 6.54 as determined by survival data in fig.1) and timepoint (0, 2, 4)
+
+## Encode genotype levels the same way as hazard ratios determined for APOE
+genotype_levels <- 
+  as.character(metadata$genotype) |>
+  recode("APOE2" = "3.51", 
+         "APOE3" = "1", 
+         "APOE4" = "6.54") |>
+  as.numeric()
+
+## Custom correlation function
+cor_fun <- function(df, factor_levels, ...) {
+  cor.test(df, factor_levels, method = "pearson", ...) |> 
+    broom::tidy()
+}
+
+MEs_mtx <- as.data.frame(MEs_df[, 2:6])
+rownames(MEs_mtx) <- MEs_df$sample
+
+## Calculate correlation for genotype
+genotype_cor <- map(MEs_mtx, cor_fun, genotype_levels)
+genotype_cor_df <- 
+  bind_rows(genotype_cor, .id = "module") |>
+  mutate(alternative = "one.sided", 
+         p.value = p.value / 2)
+genotype_cor_filt <- 
+  genotype_cor_df |>
+  mutate(trait = "genotype") |>
+  dplyr::select(module, trait, estimate, p.value)
+
+## Get module order from average module plot
+modules_in_order <- c("black", "greenyellow", "midnightblue", "pink", "yellow")
+
+## Join results for trait correlations
+trait_cors <- 
+  bind_rows(genotype_cor_filt) |>
+  mutate(sig = case_when(p.value < 0.05 ~ "sig", 
+                         TRUE ~ "n.s."), 
+         module = gsub("^ME", "", module)) |>
+  mutate(module = forcats::fct_relevel(module, modules_in_order))
+
+modules_sig_cor_APOE <- 
+  trait_cors |>
+  arrange(module, desc(module)) |>
+  filter(p.value < 0.05, trait == "genotype") |>
+  pull(module) |>
+  as.character()
+```
+
+## ED Fig 3d
+```{r}
+p_module_trait_cors <-
+  ggplot(trait_cors) +
+  geom_tile(aes(x = trait, y = module, fill = estimate),
+            size = 1) +
+  geom_tile(data = filter(trait_cors, sig == "sig"),
+            aes(x = trait, y = module),
+            size = 0.25,
+            colour = "black",
+            fill = "transparent") +
+  scale_fill_gradient2(
+    low = "blue",
+    high = "red",
+    mid = "white",
+    midpoint = 0,
+    limit = c(-1,1)) +
+  labs(x = "", y = "", fill = "Correlation", p.value = "", title = "Module-trait correlations") +
+  guides(x = guide_axis(angle = 45)) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.ticks = element_blank(), 
+        axis.text = element_text(size = 5, color = "black"), 
+        plot.title = element_text(size = 7, hjust = 0.5), 
+        legend.text = element_text(size = 5), 
+        legend.title = element_text(size = 5), 
+        legend.key.height = unit(0.1, "cm"), 
+        legend.key.width = unit(0.2, "cm"), 
+        legend.position = "bottom"
+        ) +
+  coord_flip()
+
+p_module_trait_cors
+```
+
+## ED Fig 3e
+```{r}
+## Prepare mtx for main heatmap
+avg_ME <-
+  MEs_df |>
+  pivot_longer(cols = !c(sample, genotype), names_to = "module", values_to = "value") |>
+  group_by(genotype, module) |>
+  summarize(mean_value = mean(value)) |>
+  pivot_wider(id_cols = genotype, names_from = module, values_from = mean_value) |>
+  select(greenyellow, midnightblue, pink, genotype) |>
+  relocate(genotype, greenyellow, midnightblue, pink)
+
+avg_ME_mtx <- as.matrix(avg_ME[, -1])
+rownames(avg_ME_mtx) <- avg_ME$genotype
+avg_ME_mtx_t <- t(avg_ME_mtx)
+
+## Generate top annotation
+ha_avg_condition <- 
+  HeatmapAnnotation(Genotype = gsub(".*_(E\\d)", paste0("APO", "\\1"), avg_ME$genotype),
+                    col = 
+                      list(
+                      Genotype = c(
+                        `APOE2` =  pal_APOE[1],
+                        `APOE3` =  pal_APOE[2],
+                        `APOE4` =  pal_APOE[3])),
+                    annotation_name_side = "left", 
+       annotation_name_gp = gpar(fontsize = 6), 
+       annotation_legend_param = list(
+         Genotype = list(
+           at = c("APOE2", "APOE3", "APOE4"),
+           labels_gp = gpar(fontface = "italic",
+                            fontsize = 5))), 
+       simple_anno_size = unit(2, "mm"))
+
+hm_avg_ME <-
+  Heatmap(avg_ME_mtx_t,
+          name = "Eigengene",
+          column_title = "Module eigengene",
+          cluster_columns = FALSE,
+          cluster_rows = FALSE, 
+          column_gap = unit(0.5, "mm"), 
+          heatmap_legend_param = list(
+              labels_gp = gpar(fontsize = 5), 
+              legend_height = unit(1.5, "cm"), 
+              legend_width = unit(0.5, "cm"),
+              grid_width = unit(0.15, "cm"), 
+              ncol = 1), 
+          row_title = "Modules", 
+          row_dend_width = unit(0.3, "cm"), 
+          column_names_gp = gpar(fontface = "italic", fontsize = 5))
+
+draw(hm_avg_ME, merge_legend = TRUE)
+```
+
+## Session info
+```{r}
+devtools::session_info()
+```
+

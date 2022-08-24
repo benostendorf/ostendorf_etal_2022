@@ -1,0 +1,29 @@
+---
+title: "ED Fig 3p"
+author: "Benjamin Ostendorf"
+date: '2022-08-08'
+output: rmarkdown::github_document
+---
+
+## Preamble
+```{r, message=FALSE, warning=FALSE}
+library(ggpubr)
+library(tidyverse)
+
+source("../auxiliary/helper_functions.R")
+knitr::opts_chunk$set(fig.retina = 3)
+```
+
+## ED Fig 3p
+```{r}
+df_IF <- read_tsv("../data/immunofluorescence.tsv")
+IF_plot(df_IF, x = "genotype", 
+        y = "fraction_CD45", fill = "genotype", 
+        ylab = "Fraction of nucleated (%)", title = "CD45", 
+        label.y = c(32.25, 32.25, 34), expand_limits = c(15, 35))
+```
+
+## Session info
+```{r}
+devtools::session_info()
+```

@@ -1,0 +1,670 @@
+---
+title: "Fig_04"
+author: "Benjamin Ostendorf"
+date: '2022-08-08'
+output: rmarkdown::github_document
+---
+
+Data were downloaded from [UKB](https://www.ukbiobank.ac.uk) on June 22, 2021. To download, access rights need to be applied for. In addition to the SNP array data and general phenotype data, the following COVID19-specific tables need to be downloaded (further instructions for downloads can be found [here](http://biobank.ndph.ox.ac.uk/ukb/exinfo.cgi?src=COVID19) and [here](http://biobank.ndph.ox.ac.uk/showcase/exinfo.cgi?src=COVID19_availability):  
+
+- `death`  
+- `death_cause`  
+- `covid19_misc`  
+- `covid19_result`  
+
+## Preamble
+```{r, message=FALSE, warning=FALSE}
+library(survminer)
+library(data.table)
+library(oddsratio)
+library(dtplyr)
+library(ukbtools)
+library(finalfit)
+library(gtsummary)
+library(huxtable)
+library(survival)
+library(survivalAnalysis)
+library(forestmodel)
+library(gt)
+library(lemon)
+library(patchwork)
+library(tidymodels)
+library(tidyverse)
+
+APOE_variant_levels <- c("E2;E2", "E2;E3", "E3;E3", "E3;E4", "E4;E4")
+pal_sex <- c("#EBBE94", "#0D775F")
+pal_age <- as.character(yarrr::piratepal("southpark")[1:2])
+pal_UKB <- c("#ca0020", "#f4a582", "gray75", "#92c5de", "#0571b0", "darkorchid")
+source("../auxiliary/helper_functions.R")
+source("subscripts/fm_plot_theme.R")
+set_gtsummary_theme(theme_gtsummary_compact())
+options("huxtable.knitr_output_format" = "md")
+knitr::opts_chunk$set(fig.retina = 3)
+```
+
+## Import and wrangle data
+```{r}
+source("subscripts/import_wrangle.R")
+```
+
+## ED Fig 7
+```{r, message=FALSE}
+## ------------------------------------------
+## ED Fig 7a
+## ------------------------------------------
+df_all[, .(variant, sex, tested, result, origin)] %>%
+  as_tibble() %>%
+  tbl_summary() %>%
+  as_hux_table()
+
+## ------------------------------------------
+## ED Fig 7b
+## ------------------------------------------
+df_genotypes_freqs %>%
+  ggplot(aes(x = population, fill = variant)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = pal_UKB) +
+  labs(title = "Study", 
+       y = "Fraction") +
+  guides(x = guide_axis(angle = 60)) +
+  theme_custom2 +
+  theme(legend.text = element_text(face = "italic"), 
+        axis.line.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        axis.title.x = element_blank(), 
+        legend.spacing.x = unit(0.1, "char")
+        ) +
+  coord_capped_cart(left = "both")
+
+## Compare carrier abundances
+chisq_test(population ~ variant, x = df_genotypes_freqs)
+
+## Table
+df_genotypes_freqs %>%
+  select(variant, population) %>%
+  as_tibble() %>%
+  tbl_summary(by = population) %>% 
+  add_p() %>%
+  as_hux_table()
+
+## ------------------------------------------
+## ED Fig 7c
+## ------------------------------------------
+df_genotypes_freqs %>%
+  filter(population == "UKB" & tested == "yes") %>%
+  ggplot(aes(x = result, fill = variant)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = pal_UKB) +
+  labs(title = "Test result", 
+       y = "Fraction") +
+  guides(x = guide_axis(angle = 60)) +
+  theme_custom2 +
+  theme(legend.text = element_text(face = "italic"), 
+        axis.line.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        axis.title.x = element_blank(), 
+        legend.spacing.x = unit(0.1, "char")) +
+  coord_capped_cart(left = "both")
+
+## Compare carrier abundances
+chisq_test(result ~ variant, 
+           x = filter(df_genotypes_freqs, population == "UKB" & tested == "yes"))
+
+## Table
+fit_glm_res_variant <- glm(result ~ variant, data = df, family = "binomial")
+fit_glm_res_variant %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  as_hux_table()
+
+## ------------------------------------------
+## ED Fig 7d
+## ------------------------------------------
+df_genotypes_freqs %>%
+  filter(population == "UKB") %>%
+  ggplot(aes(x = pos_vs_all, fill = variant)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = pal_UKB) +
+  labs(title = "Positive vs rest", 
+       y = "Fraction") +
+  guides(x = guide_axis(angle = 60)) +
+  theme_custom2 +
+  theme(legend.text = element_text(face = "italic"), 
+        axis.line.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        axis.title.x = element_blank(), 
+        legend.spacing.x = unit(0.1, "char")) +
+  coord_capped_cart(left = "both")
+
+## Compare carrier abundances
+chisq_test(pos_vs_all ~ variant, 
+           x = filter(df_genotypes_freqs, population == "UKB"))
+
+## Table
+fit_glm_pos_vs_all_variant <- glm(pos_vs_all ~ variant, data = df, family = "binomial")
+fit_glm_pos_vs_all_variant %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  as_hux_table()
+
+## ------------------------------------------
+## ED Fig 7e
+## ------------------------------------------
+cov19_pos %>%
+  .[, origin := factor(origin, levels = c("outpatient", "inpatient"))] %>%
+  .[, variant := factor(variant, levels = APOE_variant_levels)] %>%
+  ggplot(aes(x = origin, fill = variant)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = pal_UKB) +
+  labs(title = "Hospitalization", 
+       y = "Fraction") +
+  guides(x = guide_axis(angle = 60)) +
+  theme_custom2 +
+  theme(legend.text = element_text(face = "italic"), 
+        axis.line.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        axis.title.x = element_blank(), 
+        legend.spacing.x = unit(0.1, "char")) +
+  coord_capped_cart(left = "both")
+
+## Table
+fit_glm_test_origin <- glm(origin ~ variant, data = df, family = "binomial")
+fit_glm_test_origin %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  as_hux_table()
+```
+
+## Fig 4
+```{r}
+xlim_cov19_surv <- c(0, 40)
+ylim_cov19_surv <- c(0.8, 1)
+
+## ------------------------------------------------------
+## Fig 3a
+## ------------------------------------------------------
+fm_APOE_all_df <- 
+  cov19_pos %>%
+  mutate(variant = relevel(factor(variant), ref = "E3;E3")) %>% 
+  rename(Age = age_at_inf, 
+         Sex = sex, 
+         Genotype = variant)
+
+fm_APOE_all <-
+  forest_model(
+    coxph(Surv(OS.time, OS.covid) ~ Age + Sex + Genotype, data = fm_APOE_all_df),
+    format_options =
+      forest_model_format_options(text_size = 1.66, point_size = 1, banded = TRUE), 
+    factor_separate_line = TRUE, 
+    panels = custom_fm_panels, 
+    recalculate_width = FALSE)  +
+  theme_custom2 +
+  labs(title = "Multivariate analysis UK Biobank")
+
+## ------------------------------------------------------
+## Fig 3b
+## ------------------------------------------------------
+fit_age <- surv_fit(Surv(OS.time, OS.covid) ~ age_bin, data = cov19_pos)
+  
+plot_survival_age <- 
+  ggsurvplot(fit_age,
+             palette = pal_age,
+             risk.table = TRUE, 
+             ggtheme = theme_custom2, 
+             fontsize = 1.75, risk.table.fontsize = 1.5, 
+             xlim = xlim_cov19_surv, break.x.by = 10, 
+             ylim = ylim_cov19_surv, break.y.by = 0.05, 
+             legend.labs = gsub("age_bin=", "", names(fit_age$strata)), 
+             pval = TRUE, pval.size = 1.75, pval.coord = c(28, 0.82), size = 0.5, 
+             censor.size = 1.5
+           )
+
+## Modify aesthetics of survival plot
+plot_survival_age$plot <- 
+  plot_survival_age$plot +
+  labs(title = "Age", x = "Day") +
+  theme(legend.position = c(0.25, 0.2), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.001)
+        ) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left", 
+                    xlim = xlim_cov19_surv, ylim = ylim_cov19_surv)
+
+# Modify aesthetics of risk table
+plot_survival_age$table <-
+  plot_survival_age$table +
+  labs(x = "Day") +
+  theme(axis.text.y.left  = element_text(face = "italic"), #size = 5),
+        axis.title.y = element_blank(),
+        plot.title = element_text(hjust = 0, size = 6)) +
+  coord_capped_cart(left = "both", bottom = "left",
+                    xlim = xlim_cov19_surv)
+
+## Extract exact p value
+surv_pvalue(fit_age)[2]
+
+## ------------------------------------------------------
+## Fig 3c
+## ------------------------------------------------------
+fit_sex <- surv_fit(Surv(OS.time, OS.covid) ~ sex, data = cov19_pos)
+  
+plot_survival_sex <- 
+  ggsurvplot(fit_sex,
+             palette = pal_sex,
+             risk.table = TRUE, 
+             ggtheme = theme_custom2, 
+             fontsize = 1.75, risk.table.fontsize = 1.5, 
+             xlim = xlim_cov19_surv, break.x.by = 10, 
+             ylim = ylim_cov19_surv, break.y.by = 0.05, 
+             legend.labs = gsub("sex=", "", names(fit_sex$strata)), 
+             pval = TRUE, pval.size = 1.75, pval.coord = c(25, 0.82), size = 0.5, 
+             censor.size = 1.5
+           )
+
+## Modify aesthetics of survival plot
+plot_survival_sex$plot <- 
+  plot_survival_sex$plot +
+  labs(title = "Sex", x = "Day") +
+  theme(legend.position = c(0.25, 0.2), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.001)
+        ) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left", 
+                    xlim = xlim_cov19_surv, ylim = ylim_cov19_surv)
+
+# Modify aesthetics of risk table
+plot_survival_sex$table <-
+  plot_survival_sex$table +
+  labs(x = "Day") +
+  theme(axis.text.y.left  = element_text(face = "italic"), #size = 5),
+        axis.title.y = element_blank(),
+        plot.title = element_text(hjust = 0, size = 6)) +
+  coord_capped_cart(left = "both", bottom = "left",
+                    xlim = xlim_cov19_surv)
+
+## Extract exact p value
+surv_pvalue(fit_sex)[2]
+
+## ------------------------------------------
+## Fig 3d
+## ------------------------------------------
+fit <- surv_fit(Surv(OS.time, OS.covid) ~ variant, 
+                data = cov19_unordered)
+
+plot_survival <- 
+  ggsurvplot(fit,
+             palette = pal_UKB,
+             risk.table = TRUE, 
+             ggtheme = theme_custom2, 
+             fontsize = 1.75, risk.table.fontsize = 1.5, 
+             xlim = xlim_cov19_surv, break.x.by = 10, 
+             ylim = ylim_cov19_surv, break.y.by = 0.05, 
+             legend.labs = gsub("variant=", "", names(fit$strata)), 
+             pval = TRUE, pval.size = 1.75, pval.coord = c(30, 0.82), size = 0.5, 
+             censor.size = 1.5, 
+             tables.height = 0.32
+           )
+
+## Modify aesthetics of survival plot
+plot_survival$plot <- 
+  plot_survival$plot +
+  labs(x = element_blank(), title = "APOE genotype") +
+  theme(legend.position = c(0.2, 0.25), 
+        legend.text = element_text(face = "italic"), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.001)
+        ) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left", 
+                    xlim = xlim_cov19_surv, ylim = ylim_cov19_surv)
+
+## Modify aesthetics of risk table
+plot_survival$table <-
+  plot_survival$table +
+  labs(x = "Day") +
+  theme(axis.text.y.left  = element_text(face = "italic"), #size = 5),
+        axis.title.y = element_blank(), 
+        plot.title = element_text(hjust = 0, size = 6)) +
+  coord_capped_cart(left = "both", bottom = "left", 
+                    xlim = xlim_cov19_surv)
+
+## Extract exact p value
+format.pval(surv_pvalue(fit)[2], digits = 2)
+
+## ------------------------------------------
+## Assemble Fig 3
+## ------------------------------------------
+layout_fig <-"
+AABCD
+AABCD
+AABCD
+AAEFG
+"
+fm_APOE_all + plot_survival_age$plot + plot_survival_sex$plot + plot_survival$plot +
+  plot_survival_age$table + plot_survival_sex$table + plot_survival$table +
+  plot_layout(design = layout_fig) &
+  plot_annotation(tag_levels = 'a') &
+  theme(plot.tag = element_text(size = 8, face = "bold"))
+```
+
+## ED Fig 8
+```{r}
+## -----------------------------------------------
+## ED Fig 8a
+## -----------------------------------------------
+fm_APOE_all_df <- 
+  cov19_pos %>%
+  mutate(variant = relevel(factor(variant), ref = "E3;E3")) %>% 
+  rename(Age = age_at_inf, 
+         Sex = sex, 
+         Genotype = variant, 
+         PC1 = genetic_principal_components_f22009_0_1, 
+         PC2 = genetic_principal_components_f22009_0_2, 
+         PC3 = genetic_principal_components_f22009_0_3, 
+         PC4 = genetic_principal_components_f22009_0_4, 
+         PC5 = genetic_principal_components_f22009_0_5, 
+         PC6 = genetic_principal_components_f22009_0_6, 
+         PC7 = genetic_principal_components_f22009_0_7, 
+         PC8 = genetic_principal_components_f22009_0_8, 
+         PC9 = genetic_principal_components_f22009_0_9, 
+         PC10 = genetic_principal_components_f22009_0_10, 
+         )
+
+multivar_formula_PCs <- as.formula(paste0("Surv(OS.time, OS.covid) ~ Age + Sex + ",
+                                      paste0("PC", 1:10, collapse = " + "), " + Genotype"))
+
+fm_APOE_all_PCs <-
+  forest_model(
+    coxph(multivar_formula_PCs, data = fm_APOE_all_df),
+    format_options =
+      forest_model_format_options(text_size = 1.66, point_size = 1, banded = TRUE), 
+    factor_separate_line = TRUE, 
+    panels = custom_fm_panels, 
+    recalculate_width = FALSE)  +
+  theme_custom2 +
+  labs(title = "Multivariate analysis UK Biobank")
+print(fm_APOE_all_PCs)
+
+# -----------------------------------------------
+# ED Fig 8b
+# -----------------------------------------------
+as_tibble(fm_APOE_all_df) |>
+  mutate(Genotype = as.character(Genotype)) |>
+  ggplot(aes(x = PC1, y = PC2, color = Genotype, shape = Genotype)) +
+  ggrastr::geom_point_rast(size = 0.75, alpha = 0.5, stroke = 0, raster.dpi = 600) +
+  scale_color_manual(values = pal_UKB) +
+  guides(color = guide_legend(override.aes = list(size=1.25))) +
+  scale_shape_manual(values = c(15, 15, 16, 17, 17)) +
+  labs(title = "Principal components 1-2") +
+  coord_fixed() +
+  theme_bw() +
+  theme(panel.border = element_rect(size = custom_linewidth, colour = "black"),
+        panel.grid = element_blank(),
+        panel.grid.major = element_line(size = (custom_linewidth), color = "grey85", linetype = "dotted"),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 5, colour = "black"),
+        axis.title = element_text(size = 6),
+        axis.ticks = element_line(size = custom_linewidth),
+        axis.ticks.length = unit(0.075, "cm"),
+        axis.title.y = element_text(margin = margin(r = 3.2)),
+        axis.title.x = element_text(margin = margin(t = 4)),
+        plot.title = element_text(size = 7, hjust = 0.5),
+        strip.text = element_text(size = 6, face = "bold"),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 5, margin = margin(l = -10), face = "italic"),
+        legend.margin =  margin(-10, 0, -10, -10),
+        legend.key.height = unit(2, "mm"))
+
+# -----------------------------------------------
+# ED Fig 8c
+# -----------------------------------------------
+as_tibble(fm_APOE_all_df) |>
+  mutate(Genotype = as.character(Genotype)) |>
+  ggplot(aes(x = PC3, y = PC4, color = Genotype, shape = Genotype)) +
+  ggrastr::geom_point_rast(size = 0.75, alpha = 0.5, stroke = 0, raster.dpi = 600) +
+  scale_color_manual(values = pal_UKB) +
+  scale_shape_manual(values = c(15, 15, 16, 17, 17)) +
+  guides(color = guide_legend(override.aes = list(size=1.25))) +
+  labs(title = "Principal components 3-4") +
+  coord_fixed() +
+  theme_bw() +
+  theme(panel.border = element_rect(size = custom_linewidth, colour = "black"),
+        panel.grid = element_blank(),
+        panel.grid.major = element_line(size = (custom_linewidth), color = "grey85", linetype = "dotted"),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 5, colour = "black"),
+        axis.title = element_text(size = 6),
+        axis.ticks = element_line(size = custom_linewidth),
+        axis.ticks.length = unit(0.075, "cm"),
+        axis.title.y = element_text(margin = margin(r = 3.2)),
+        axis.title.x = element_text(margin = margin(t = 4)),
+        plot.title = element_text(size = 7, hjust = 0.5),
+        strip.text = element_text(size = 6, face = "bold"),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 5, margin = margin(l = -10), face = "italic"),
+        legend.margin =  margin(-10, 0, -10, -10),
+        legend.key.height = unit(2, "mm"))
+```
+
+## ED Fig 8d-g
+```{r}
+## Wrangle data
+cov19_pos_european <-
+  cov19_pos %>%
+  .[, variant := factor(variant, ordered = FALSE, levels = APOE_variant_levels)] %>%
+  .[genetic_ethnic_grouping_f22006_0_0 == "Caucasian"]
+
+## ----------------------------------------------------
+## ED Fig 8d
+## ----------------------------------------------------
+fm_APOE_all_df_europ <- 
+  cov19_pos_european %>%
+  mutate(variant = relevel(factor(variant), ref = "E3;E3")) %>% 
+  rename(Age = age_at_inf, 
+         Sex = sex, 
+         Genotype = variant, 
+         PC1 = genetic_principal_components_f22009_0_1, 
+         PC2 = genetic_principal_components_f22009_0_2, 
+         PC3 = genetic_principal_components_f22009_0_3, 
+         PC4 = genetic_principal_components_f22009_0_4, 
+         PC5 = genetic_principal_components_f22009_0_5, 
+         PC6 = genetic_principal_components_f22009_0_6, 
+         PC7 = genetic_principal_components_f22009_0_7, 
+         PC8 = genetic_principal_components_f22009_0_8, 
+         PC9 = genetic_principal_components_f22009_0_9, 
+         PC10 = genetic_principal_components_f22009_0_10, 
+  )
+
+as_tibble(fm_APOE_all_df_europ) |>
+  mutate(Genotype = as.character(Genotype)) |>
+  ggplot(aes(x = PC1, y = PC2, color = Genotype, shape = Genotype)) +
+  ggrastr::geom_point_rast(size = 0.75, alpha = 0.5, stroke = 0, raster.dpi = 600) +
+  scale_color_manual(values = pal_UKB) +
+  guides(color = guide_legend(override.aes = list(size=1.25))) +
+  scale_shape_manual(values = c(15, 15, 16, 17, 17)) +
+  labs(title = "Principal components 1-2") +
+  coord_fixed() +
+  theme_bw() +
+  theme(panel.border = element_rect(size = custom_linewidth, colour = "black"),
+        panel.grid = element_blank(),
+        panel.grid.major = element_line(size = (custom_linewidth), color = "grey85", linetype = "dotted"),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 5, colour = "black"),
+        axis.title = element_text(size = 6),
+        axis.ticks = element_line(size = custom_linewidth),
+        axis.ticks.length = unit(0.075, "cm"),
+        axis.title.y = element_text(margin = margin(r = 3.2)),
+        axis.title.x = element_text(margin = margin(t = 4)),
+        plot.title = element_text(size = 7, hjust = 0.5),
+        strip.text = element_text(size = 6, face = "bold"),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 5, margin = margin(l = -10), face = "italic"),
+        legend.margin =  margin(-10, 0, -10, -10),
+        legend.key.height = unit(2, "mm"))
+
+## ----------------------------------------------------
+## ED Fig 8e
+## ----------------------------------------------------
+as_tibble(fm_APOE_all_df_europ) |>
+  mutate(Genotype = as.character(Genotype)) |>
+  ggplot(aes(x = PC4, y = PC3, color = Genotype, shape = Genotype)) +
+  ggrastr::geom_point_rast(size = 0.75, alpha = 0.5, stroke = 0, raster.dpi = 600) +
+  scale_color_manual(values = pal_UKB) +
+  scale_shape_manual(values = c(15, 15, 16, 17, 17)) +
+  guides(color = guide_legend(override.aes = list(size=1.25))) +
+  labs(title = "Principal components 3-4") +
+  coord_fixed() +
+  theme_bw() +
+  theme(panel.border = element_rect(size = custom_linewidth, colour = "black"),
+        panel.grid = element_blank(),
+        panel.grid.major = element_line(size = (custom_linewidth), color = "grey85", linetype = "dotted"),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 5, colour = "black"),
+        axis.title = element_text(size = 6),
+        axis.ticks = element_line(size = custom_linewidth),
+        axis.ticks.length = unit(0.075, "cm"),
+        axis.title.y = element_text(margin = margin(r = 3.2)),
+        axis.title.x = element_text(margin = margin(t = 4)),
+        plot.title = element_text(size = 7, hjust = 0.5),
+        strip.text = element_text(size = 6, face = "bold"),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 5, margin = margin(l = -10), face = "italic"),
+        legend.margin =  margin(-10, 0, -10, -10),
+        legend.key.height = unit(2, "mm"))
+
+## ------------------------------------------------------
+## ED Fig 8f
+## ------------------------------------------------------
+df_APOE_df_europ <- 
+  cov19_pos_european %>%
+  mutate(variant = relevel(factor(variant), ref = "E3;E3")) %>% 
+  rename(Age = age_at_inf, 
+         Sex = sex, 
+         Genotype = variant)
+
+forest_model(coxph(Surv(OS.time, OS.covid) ~ Age + Sex + Genotype,
+                   data = df_APOE_df_europ),
+             format_options =
+               forest_model_format_options(text_size = 1.66,
+                                           point_size = 1,
+                                           banded = TRUE),
+             factor_separate_line = TRUE,
+             panels = custom_fm_panels,
+             recalculate_width = FALSE)  +
+  theme_custom2 +
+  labs(title = "Multivariate analysis UK Biobank")
+
+## ------------------------------------------------------
+## ED Fig 8g
+## ------------------------------------------------------
+fit_europ <- surv_fit(Surv(OS.time, OS.covid) ~ variant, 
+                data = cov19_pos_european)
+xlim_cov19_surv <- c(0, 40)
+ylim_cov19_surv <- c(0.8, 1)
+
+plot_surv_europ <- 
+  ggsurvplot(fit_europ,
+             palette = pal_UKB,
+             risk.table = TRUE, 
+             ggtheme = theme_custom2, 
+             fontsize = 1.75, risk.table.fontsize = 1.5, 
+             xlim = xlim_cov19_surv, break.x.by = 10, 
+             ylim = ylim_cov19_surv, break.y.by = 0.05, 
+             legend.labs = gsub("variant=", "", names(fit_europ$strata)), 
+             pval = TRUE, pval.size = 1.75, pval.coord = c(30, 0.82), size = 0.5, 
+             censor.size = 1.5, 
+             tables.height = 0.32
+           )
+## Extract exact p value
+format.pval(surv_pvalue(fit_europ)[2], digits = 2)
+
+## Modify aesthetics of survival plot
+plot_surv_europ$plot <- 
+  plot_surv_europ$plot +
+  labs(x = element_blank(), title = "APOE genotype") +
+  theme(legend.position = c(0.2, 0.25), 
+        legend.text = element_text(face = "italic"), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.001)
+        ) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left", 
+                    xlim = xlim_cov19_surv, ylim = ylim_cov19_surv)
+
+## Modify aesthetics of risk table
+plot_surv_europ$table <-
+  plot_surv_europ$table +
+  labs(x = "Day") +
+  theme(axis.text.y.left  = element_text(face = "italic"), #size = 5),
+        axis.title.y = element_blank(), 
+        plot.title = element_text(hjust = 0, size = 6)) +
+  coord_capped_cart(left = "both", bottom = "left", 
+                    xlim = xlim_cov19_surv) 
+print(plot_surv_europ, newpage = FALSE)
+```
+
+## ED Fig 8h
+```{r}
+## Wrangle survival data for the first month of 2019 (30 days)
+select_columns_2019 <- c("variant", "OS.time.other", "OS.other", "date_death_censor")
+start_date_observation_period <- as.Date("2019-01-01")
+end_date_observation_period <- as.Date("2019-01-31")
+
+df_2019 <- 
+  as_tibble(df[, ..select_columns_2019]) |>
+  filter(date_death_censor > start_date_observation_period) |>
+  mutate(OS.other = case_when(date_death_censor  > end_date_observation_period ~ 0, 
+                              TRUE ~ OS.other)) |>
+  mutate(date_death_censor = case_when(date_death_censor > end_date_observation_period ~ end_date_observation_period, 
+                                       TRUE ~ date_death_censor)) |>
+  mutate(OS.time.other = date_death_censor - start_date_observation_period) |>
+  mutate(variant = factor(variant, ordered = FALSE, levels = APOE_variant_levels))
+
+xlim_cov19_surv <- c(0, 30)
+ylim_cov19_surv <- c(0.8, 1)
+fit_2019 <- surv_fit(Surv(OS.time.other, OS.other) ~ variant, 
+                data = df_2019)
+
+plot_survival_2019 <- 
+  ggsurvplot(fit_2019,
+             palette = pal_UKB,
+             risk.table = TRUE,
+             ggtheme = theme_custom2,
+             fontsize = 1.75, risk.table.fontsize = 1.5,
+             xlim = xlim_cov19_surv, break.x.by = 10,
+             ylim = ylim_cov19_surv, break.y.by = 0.05,
+             legend.labs = gsub("variant=", "", names(fit_2019$strata)),
+             pval = TRUE, pval.size = 1.75, pval.coord = c(25, 0.82), size = 0.5,
+             censor.size = 1.5,
+             tables.height = 0.32
+  )
+
+## Modify aesthetics of survival plot
+plot_survival_2019$plot <- 
+  plot_survival_2019$plot +
+  labs(x = element_blank(), title = "Survival January 2019") +
+  theme(legend.position = c(0.2, 0.25), 
+        legend.text = element_text(face = "italic"), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.001)
+        ) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left", 
+                    xlim = xlim_cov19_surv, ylim = ylim_cov19_surv)
+
+## Modify aesthetics of risk table
+plot_survival_2019$table <-
+  plot_survival_2019$table +
+  labs(x = "Day") +
+  theme(axis.text.y.left  = element_text(face = "italic"), 
+        axis.title.y = element_blank(), 
+        plot.title = element_text(hjust = 0, size = 6)) +
+  coord_capped_cart(left = "both", bottom = "left", 
+                    xlim = xlim_cov19_surv)
+print(plot_survival_2019, newpage = FALSE)
+```
+
+## Session info
+```{r}
+devtools::session_info()
+```
+

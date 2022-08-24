@@ -1,0 +1,599 @@
+---
+title: "Bulk RNA-seq of dissociated lungs from APOE knock-in mice"
+author: "Benjamin Ostendorf"
+date: 2022-08-08
+output: rmarkdown::github_document
+---
+
+## Preamble
+```{r, message=FALSE, warning=FALSE}
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(DESeq2)
+library(ComplexHeatmap)
+library(lemon)
+library(ggpubr)
+library(RColorBrewer)
+library(clusterProfiler)
+library(igraph)
+library(WGCNA)
+library(tidyverse)
+
+source("../../auxiliary/helper_functions.R")
+knitr::opts_chunk$set(fig.retina = 3)
+
+cols_APOE_homo_samples <- c(rep(pal_APOE[1], 4), rep(pal_APOE[3], 3), 
+                            rep(pal_APOE[1], 6), rep(pal_APOE[2], 4), rep(pal_APOE[3], 5), 
+                            rep(pal_APOE[1], 7), rep(pal_APOE[2], 5), rep(pal_APOE[3], 5))
+
+## Override ComplexHeatmap options
+ht_opt("heatmap_row_names_gp" = gpar(fontsize = 5), 
+       "heatmap_column_names_gp" = gpar(fontsize = 5), 
+       "heatmap_row_title_gp" = gpar(fontsize = 6), 
+       "heatmap_column_title_gp" = gpar(fontsize = 7), 
+       "legend_title_gp" = gpar(fontsize = 6), 
+       "legend_labels_gp" = gpar(fontsize = 5), 
+       "legend_grid_height" = unit(2, "mm"), 
+       "legend_grid_width" = unit(2, "mm"))
+
+theme_dotplot <- 
+  theme(
+    axis.title = element_text(size = 6), 
+    axis.text.x = element_text(size = 5), 
+    axis.text.y = element_text(size = 5), 
+    legend.text = element_text(size = 5), 
+    legend.title = element_text(size = 5)
+  )
+```
+
+## Import data
+A DESeq2 object for import can be found [here](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE184287)
+Place it into `../../data/RNAseq`
+```{r}
+dds <- readRDS("../../data/RNAseq/dds_GSE184287.rds")
+
+coldata <- as.data.frame(colData(dds))
+
+## Get log2-transformed and scaled gene expression data
+dds_vst <- vst(dds)
+counts_norm <- counts(dds, normalized = TRUE)
+counts_log2 <- log2(counts_norm + 1)
+counts_scaled <- t(scale(t(counts_log2)))
+```
+
+## Prepare for WGCNA
+```{r}
+metadata <- data.frame(genotype = dds$genotype, 
+                       day = gsub("d(\\d)", "\\1", dds$timepoint), 
+                       sample = colnames(dds))
+
+## Get variance stabilized expression as input for WGCNA as recommended by package authors
+df_vsd <- getVarianceStabilizedData(dds)
+df_rv <- rowVars(df_vsd)
+
+## Get top 30% variable genes
+q70_cutoff <- quantile(rowVars(df_vsd), 0.7)
+expr_normalized <- df_vsd[df_rv > q70_cutoff, ]
+colnames(expr_normalized) <- metadata$sample
+
+expr_normalized_df <- 
+  data.frame(expr_normalized) |>
+  mutate(Gene_id = row.names(expr_normalized)) |>
+  pivot_longer(-Gene_id)
+
+## Transpose for WGCNA
+input_mat <- t(expr_normalized)
+```
+
+## Run WGCNA
+```{r}
+## ----------------------------------------
+## Set parameters for WGCNA
+## ----------------------------------------
+
+## Activate multithreading
+allowWGCNAThreads() 
+
+# Choose a set of soft-thresholding powers
+powers <- c(c(1:10), seq(from = 12, to = 20, by = 2))
+
+# Call the network topology analysis function
+sft <- pickSoftThreshold(input_mat, 
+                         powerVector = powers,
+                         verbose = 5)
+picked_power <- 10
+
+# Force use of WGCNA cor function (fix a namespace conflict issue)
+temp_cor <- cor
+cor <- WGCNA::cor         
+
+## ----------------------------------------
+## Run WGCNA and tidy results
+## ----------------------------------------
+netwk <- blockwiseModules(input_mat,
+                          power = picked_power,  
+                          networkType = "signed",
+                          maxBlockSize = 12000,
+                          verbose = 3)
+
+# Convert labels to colors for plotting
+mergedColors <- labels2colors(netwk$colors)
+
+## Relate genes to modules
+module_df <- data.frame(gene_id = names(netwk$colors),
+                        colors = labels2colors(netwk$colors))
+
+# Get Module eigengenes per cluster
+MEs0 <- moduleEigengenes(input_mat, mergedColors)$eigengenes
+
+# Reorder modules so similar modules are next to each other
+MEs0 <- orderMEs(MEs0)
+module_order <- gsub("ME","", names(MEs0))
+
+# Add sample names
+MEs0$sample <-  row.names(MEs0)
+MEs_mtx <- MEs0[, !(colnames(MEs0) == "sample")]
+
+# tidy & plot data
+mME <- 
+  MEs0 |>
+  pivot_longer(-sample) |>
+  mutate(name = gsub("ME", "", name),
+         name = factor(name, levels = module_order))
+```
+
+## ED Fig 3a
+```{r}
+## Prepare mtx for main heatmap
+avg_ME <-
+  mME |>
+  mutate(group = gsub("^(\\d*_)", "", sample)) |>
+  group_by(group, name) |>
+  summarize(mean_value = mean(value)) |>
+  pivot_wider(id_cols = group, names_from = name, values_from = mean_value)
+
+avg_ME_mtx <- as.matrix(avg_ME[, -1])
+rownames(avg_ME_mtx) <- avg_ME$group
+avg_ME_mtx_t <- t(avg_ME_mtx)
+
+## Generate top annotation
+ha_avg_condition <- 
+  HeatmapAnnotation(Day = ifelse(grepl("ctrl", avg_ME$group), 0, 
+                                       ifelse(grepl("d2", avg_ME$group), 2, 4)), 
+                    Genotype = gsub(".*_(E\\d)", paste0("APO", "\\1"), avg_ME$group),
+                    col = 
+                      list(
+                      Day = c(
+                        `0` = brewer.pal(8, "Accent")[1],
+                        `2` = brewer.pal(8, "Accent")[2],
+                        `4` = brewer.pal(8, "Accent")[3]), 
+                      Genotype = c(
+                        `APOE2` =  pal_APOE[1],
+                        `APOE3` =  pal_APOE[2],
+                        `APOE4` =  pal_APOE[3])),
+                    annotation_name_side = "left", 
+       annotation_name_gp = gpar(fontsize = 6), 
+       annotation_legend_param = list(
+         Genotype = list(
+           at = c("APOE2", "APOE3", "APOE4"),
+           labels_gp = gpar(fontface = "italic",
+                            fontsize = 5))), 
+       simple_anno_size = unit(2, "mm"))
+
+hm_avg_ME <-
+  Heatmap(avg_ME_mtx_t,
+          top_annotation = ha_avg_condition,
+          name = "Eigengene",
+          column_title = "Module eigengene",
+          cluster_columns = FALSE,
+          column_split = c(rep("d0", 2), rep("d2", 3), rep("d4", 3)),
+          column_gap = unit(0.5, "mm"), 
+          heatmap_legend_param = list(
+              labels_gp = gpar(fontsize = 5),
+              legend_height = unit(1.5, "cm"), 
+              legend_width = unit(0.5, "cm"),
+              grid_width = unit(0.15, "cm"), 
+              ncol = 1), 
+          row_title = "Modules", 
+          row_dend_width = unit(0.3, "cm"))
+
+draw(hm_avg_ME, merge_legend = TRUE)
+```
+
+## Assess significance of module difference across conditions
+```{r}
+## the following assesses the Pearson correlation between module eigengenes and traits, as encoded by APOE(APOE3 = 1, APOE2 = 3.51, APOE4 = 6.54 as determined by survival data in Fig 1) and timepoint (0, 2, 4)
+
+## Encode genotype levels the same way as hazard ratios determined for APOE
+genotype_levels <-
+  metadata$genotype |>
+  recode("APOE2" = "3.51",
+         "APOE3" = "1",
+         "APOE4" = "6.54") |>
+  as.numeric()
+
+day_levels <- 
+  metadata$day |>
+  as.numeric()
+
+## Custom correlation function
+cor_fun <- function(df, factor_levels) {
+  cor.test(df, factor_levels, method = "pearson") |> 
+    broom::tidy()
+}
+
+## Calculate correlation for genotype
+genotype_cor <- map(MEs_mtx, cor_fun, genotype_levels)
+genotype_cor_df <- bind_rows(genotype_cor, .id = "module")
+genotype_cor_filt <- 
+  genotype_cor_df |>
+  mutate(trait = "genotype") |>
+  dplyr::select(module, trait, estimate, p.value)
+
+## Calculate correlation for day
+day_cor <- map(MEs_mtx, cor_fun, day_levels)
+day_cor_df <- bind_rows(day_cor, .id = "module")
+day_cor_filt <- 
+  day_cor_df |>
+  mutate(trait = "day") |>
+  select(module, trait, estimate, p.value)
+
+## Get module order from average module plot
+modules_in_order <- rownames(avg_ME_mtx_t)[row_order(hm_avg_ME)]
+
+## Join results for trait correlations
+trait_cors <- 
+  bind_rows(day_cor_filt, genotype_cor_filt) |>
+  mutate(sig = case_when(p.value < 0.05 ~ "sig", 
+                         TRUE ~ "n.s."), 
+         module = gsub("^ME", "", module)) |>
+  mutate(module = forcats::fct_relevel(module, modules_in_order))
+
+modules_sig_cor_APOE <- 
+  trait_cors |>
+  arrange(module, desc(module)) |>
+  filter(p.value < 0.05, trait == "genotype") |>
+  pull(module) |>
+  as.character()
+
+select_modules <- modules_sig_cor_APOE
+
+trait_cors |>
+  filter(module %in% select_modules, trait == "genotype") |>
+  select(module, p.value)
+```
+
+## Fig 3b
+```{r}  
+ggplot(trait_cors) +
+  geom_tile(aes(x = trait, y = module, fill = estimate),
+            size = 1) +
+  geom_tile(data = filter(trait_cors, sig == "sig"),
+            aes(x = trait, y = module),
+            size = 0.25,
+            colour = "black",
+            fill = "transparent") +
+  scale_fill_gradient2(
+    low = "blue",
+    high = "red",
+    mid = "white",
+    midpoint = 0,
+    limit = c(-1,1)) +
+  labs(x = "", y = "", fill = "Correlation", p.value = "", title = "Module-trait correlations") +
+  guides(x = guide_axis(angle = 45)) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.ticks = element_blank(), 
+        axis.text = element_text(size = 5, color = "black"), 
+        plot.title = element_text(size = 7, hjust = 0.5), 
+        legend.text = element_text(size = 5), 
+        legend.title = element_text(size = 5), 
+        legend.key.height = unit(0.2, "cm"), 
+        legend.key.width = unit(0.1, "cm")
+        ) +
+  coord_flip()
+```
+
+## Fig 3c
+```{r}
+mME |>
+  filter(name %in% select_modules) |>
+  mutate(name = factor(name, levels = select_modules)) |>
+  mutate(genotype = gsub("\\d*_\\w*_(E\\d)", paste0("APO", "\\1"), sample), 
+         day = case_when(grepl("ctrl", sample) ~ "0",
+                         grepl("d2", sample) ~ "2",
+                         grepl("d4", sample) ~ "4")) |>
+  ggplot(aes(x = day, y = value, fill = genotype)) +
+  geom_boxplot(outlier.shape = NA, position = "dodge", size = 0.15, width = 0.6) +
+  ggbeeswarm::geom_beeswarm(dodge.width = 0.6, size = 0.1, alpha = 0.5, show.legend = F) +
+  theme_custom2 +
+  scale_fill_manual(values = pal_APOE) +
+  labs(title = "Module trajectories", x = "Day", y = "Module eigengene") +
+  theme(legend.text = element_text(face = "italic"), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.4), 
+        legend.spacing.x = unit(0.1, "char"), 
+        legend.spacing.y = unit(0.1, "char"),
+        legend.position = "right",
+        strip.text = element_text(size = 6, margin = margin(c(2,2, 2, 2)))) +
+  lemon::coord_capped_cart(left = "bottom", bottom = "left") +
+  facet_wrap(~ name, ncol = 5)
+
+
+## Export gene lists for select modules
+module_df_select_modules <- 
+  module_df |>
+  filter(colors %in% select_modules) |>
+  arrange(desc(colors))
+```
+
+## ED Fig 3f, i, k, m, o
+```{r}
+## Tweak chooseTopHubInEachModule function so that not only one top gene but instead a given number of genes is returned (returns a list instead of a named vector)
+chooseNHubInEachModule <- function (datExpr, 
+                                    colorh, 
+                                    omitColors, 
+                                    power = 10, 
+                                    n_genes = 10, 
+                                    type = "signed") {
+    isIndex = FALSE
+    modules = names(table(colorh))
+    if (!is.na(omitColors)[1]) 
+        modules = modules[!is.element(modules, omitColors)]
+    if (is.null(colnames(datExpr))) {
+        colnames(datExpr) = 1:dim(datExpr)[2]
+        isIndex = TRUE
+    }
+    hubs = list()
+    for (m in modules) {
+        adj = adjacency(datExpr[, colorh == m], power = power, 
+            type = type)
+        hub = sort(rowSums(adj), decreasing = TRUE)
+        hubs[[m]] = names(hub[1:n_genes])
+    }
+    if (isIndex) {
+        hubs = as.numeric(hubs)
+        names(hubs) = modules
+    }
+    return(hubs)
+}
+
+hub_genes <- 
+  chooseNHubInEachModule(input_mat,
+                         mergedColors,
+                         omitColors = unique(mergedColors)[!(unique(mergedColors) %in% select_modules)],
+                         power = 10,
+                         n_genes = 10, 
+                         type = "signed")
+
+radian.rescale <- function(x, start=0, direction=1) {
+  c.rotate <- function(x) (x + start) %% (2 * pi) * direction
+  c.rotate(scales::rescale(x, c(0, 2 * pi), range(x)))
+}
+lab.locs <- radian.rescale(x=1:11, direction= -1, start=0)
+
+
+for (m in select_modules) {
+  
+  ## Generate adjacency matrix to calculate edges between hubgenes
+  correlation_mtx <-
+    adjacency(input_mat[, colnames(input_mat) %in% hub_genes[[m]]],
+              power = 2,
+              type = "signed") |>
+    as_tibble(rownames = "gene") |>
+    pivot_longer(cols = -gene,
+                 names_to = "partner",
+                 values_to = "weight") |>
+    filter(!(gene == partner))
+  
+  ## Build igraph object from adjacency matrix
+  igraph_object <- 
+    graph_from_data_frame(d = correlation_mtx,
+                          vertices = data.frame(gene = unique(correlation_mtx$gene)),
+                          directed = T) 
+
+  igraph_layout <- layout_in_circle(igraph_object)
+  
+  ## Plot network from hubgenes with adjacency matrix
+  par(mar=c(0, 0,0,0))
+  plot(igraph_object, 
+       edge.arrow.size = 0, 
+       edge.color = m, 
+       edge.width = E(igraph_object)$weight/1.75,
+       vertex.color = m, 
+       vertex.frame.color = "white",
+       vertex.size = 20, 
+       vertex.label.color = "black",
+       vertex.label.font = 3, 
+       vertex.label.family = "Helvetica", 
+       vertex.label.cex = 0.4, 
+       vertex.label.dist = 4.5,  
+       vertex.label.degree = lab.locs,
+       layout = igraph_layout
+       )
+  rect(-0.065 * nchar(m), -0.15, 0.065 * nchar(m), 0.15, border = NA, col = rgb(1, 1, 1, alpha = 0.8))
+  text(x = 0, y = 0, label = m, font = 2, cex = 0.5)
+}
+```
+
+## ED Fig 3h
+```{r}
+## Generate df to hold eigengene scores and metadata
+module_expr <-
+  MEs_mtx |>
+  as_tibble(rownames = "sample") |> 
+  inner_join(metadata)
+colnames(module_expr) <- gsub("ME", "", colnames(module_expr))
+
+## Get genes of select modules
+genes_select_modules <- 
+  module_df_select_modules |>
+  filter(colors %in% c("greenyellow", "midnightblue")) |>
+  arrange(desc(colors)) |>
+  pull(gene_id)
+
+## Prepare df with gene expression per module
+counts_hm_select <- counts_scaled[genes_select_modules, ]
+
+## Prepare vector for splitting by module
+select_mods_ls <- list(
+  `midnightblue` = module_df_select_modules$gene_id[module_df_select_modules$colors == "midnightblue"], 
+  `greenyellow` = module_df_select_modules$gene_id[module_df_select_modules$colors == "greenyellow"]
+)
+
+cluster_names <- 
+  unlist(map(names(select_mods_ls), function(x) rep(x, length(select_mods_ls[[x]]))))
+
+hubgenes_gene_idx <- which(rownames(counts_hm_select) %in% c(hub_genes$midnightblue, hub_genes$greenyellow))
+hubgenes_gene_labels <- rownames(counts_hm_select)[hubgenes_gene_idx]
+
+## Get genes for top enriched pathways (as calculated with GO enrichment in script 05_202104_GSA.Rmd)
+source("subscripts/get_GO_genes.R")
+
+if (!exists("GO_genes_B_cell_act")) GO_genes_B_cell_act <- get_GO_genes("B cell activation")
+if (!exists("GO_genes_T_cell_act")) GO_genes_T_cell_act <- get_GO_genes("T cell activation")
+B_cell_act_sig <- rownames(counts_hm_select) %in% GO_genes_B_cell_act
+T_cell_act_sig <- rownames(counts_hm_select) %in% GO_genes_T_cell_act
+
+
+## ----------------------------------------
+## Create hm annotations
+## ----------------------------------------
+ha_condition <- 
+  HeatmapAnnotation(Day = module_expr$day,
+                    Genotype = module_expr$genotype,
+                    col = list(
+                      Day = c(
+                        `0` = brewer.pal(8, "Accent")[1],
+                        `2` = brewer.pal(8, "Accent")[2],
+                        `4` = brewer.pal(8, "Accent")[3]
+                      ), 
+                      Genotype = c(
+                        `APOE2` = pal_APOE[1],
+                        `APOE3` = pal_APOE[2],
+                        `APOE4` = pal_APOE[3]
+                      )),
+                    annotation_name_side = "left",
+                    annotation_name_gp = gpar(fontsize = 6),
+                    annotation_legend_param = list(
+                      Genotype = list(
+                        at = c("APOE2", "APOE3", "APOE4"),
+                        labels_gp = gpar(fontface = "italic", fontsize = 5))),
+                    simple_anno_size = unit(2, "mm"))
+
+ha_module_expr <- 
+  HeatmapAnnotation(
+    greenyellow = anno_barplot(
+      dplyr::select(module_expr, greenyellow),
+      gp = gpar(fill = cols_APOE_homo_samples, lwd = 0),
+      axis_param = list(gp = gpar(fontsize = 3)),
+      height = unit(0.5, "cm")), 
+    midnightblue = anno_barplot(
+      dplyr::select(module_expr, midnightblue),
+      gp = gpar(fill = cols_APOE_homo_samples, lwd = 0),
+      axis_param = list(gp = gpar(fontsize = 3)),
+      height = unit(0.5, "cm")),
+    annotation_name_side = "left",
+    annotation_name_gp = gpar(fontsize = 4))
+
+## Plot hm
+hm_select_modules <- 
+  Heatmap(counts_hm_select,
+          top_annotation = ha_condition,
+          bottom_annotation = ha_module_expr, 
+          cluster_columns = FALSE,
+          split = cluster_names,
+          name = "z-score",
+          column_title = "Gene expression of select modules",
+          column_split = dds$timepoint, 
+          column_gap = unit(0.5, "mm"), 
+          show_column_names = FALSE, 
+          show_row_names = FALSE,
+          row_dend_width = unit(0.3, "cm"), 
+          heatmap_legend_param = list(
+              labels_gp = gpar(fontsize = 5),
+              legend_height = unit(0.4, "cm"), 
+              grid_width = unit(0.15, "cm"), 
+              ncol = 1)) +
+  ## Heatmap to indicate B and T cell act genes
+  Heatmap(B_cell_act_sig + 0, name = "GO: B cell act.", col = c("0" = "white", "1" = "greenyellow"), 
+        show_heatmap_legend = FALSE, width = unit(2, "mm")) +
+  Heatmap(T_cell_act_sig + 0, name = "GO: T cell act.", col = c("0" = "white", "1" = "midnightblue"), 
+      show_heatmap_legend = FALSE, width = unit(2, "mm")) +
+  rowAnnotation(link = anno_mark(at = hubgenes_gene_idx, 
+                                 labels = hubgenes_gene_labels, #lymphocyte_gene_labels,
+                                 labels_gp = gpar(fontsize = 5, fontface = "italic"),
+                                 padding = unit(1, "mm")))
+
+draw(hm_select_modules, merge_legend = TRUE)
+```
+
+## ED Fig 3g, j, l, n
+```{r}
+## Relate genes to modules
+module_df <- 
+  data.frame(gene_id = names(netwk$colors),
+             colors = labels2colors(netwk$colors)) |>
+  rename(module = colors, 
+         gene = gene_id) |>
+  mutate(entrez = mapIds(org.Mm.eg.db,
+                         keys = gene,
+                         keytype = "SYMBOL",
+                         column = "ENTREZID")) |>
+  filter(!(is.na(entrez)))
+
+gene_universe <- 
+  as_tibble(rownames(dds)) |>
+  rename(gene = value) |>
+  mutate(entrez = mapIds(org.Mm.eg.db,
+                         keys = gene,
+                         keytype = "SYMBOL",
+                         column = "ENTREZID")) |>
+  filter(!(is.na(entrez)))
+
+modules <- unique(module_df$module)
+
+for (module in modules){
+  
+  df_filt <- filter(module_df, module == {{module}})
+
+  ego <- enrichGO(gene          = df_filt$entrez,
+                  universe      = gene_universe$entrez,
+                  OrgDb         = org.Mm.eg.db,
+                  ont           = c("BP"), 
+                  pAdjustMethod = "fdr",
+                  pvalueCutoff  = 0.05,
+                  qvalueCutoff  = 0.1)
+  
+  ego_simp <- clusterProfiler::simplify(ego, cutoff = 0.6, by = "p.adjust", select_fun = min)
+  ego_simp <- setReadable(ego_simp, 'org.Mm.eg.db', 'ENTREZID')
+  
+  head(summary(ego_simp))
+  results_GO <- summary(ego_simp)
+  
+  if (nrow(results_GO) > 0) {
+    
+    GO_dotplot <- 
+      dotplot(ego_simp, 
+              showCategory = 5) +
+      theme_dotplot +
+      scale_size_continuous(range = c(0.5, 2), 
+                            breaks = c(5, 10, 15, 20)) +
+      scale_y_discrete(labels = function(x) str_wrap(x, width = 35)) +
+      labs(title = paste0(str_to_title(module), " module GO term enrichment")) +
+      theme(legend.key.size = unit(.1, "cm"), 
+            legend.position = "right", 
+            axis.text.x = element_text(size = 5), 
+            plot.title = element_text(size = 7, hjust = 0.5))
+
+    print(GO_dotplot)
+  }
+}
+```
+
+## Session info
+```{r}
+devtools::session_info()
+```

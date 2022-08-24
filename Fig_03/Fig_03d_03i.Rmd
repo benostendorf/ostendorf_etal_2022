@@ -1,0 +1,149 @@
+---
+title: "Flow cytometry Fig 3, ED Fig 4"
+author: "Benjamin Ostendorf"
+date: '2022-08-08'
+output: rmarkdown::github_document
+---
+
+## Preamble
+```{r, message=FALSE, warning=FALSE}
+library(patchwork)
+library(ggpubr)
+library(RColorBrewer)
+library(tidyverse)
+
+source("../auxiliary/helper_functions.R")
+knitr::opts_chunk$set(fig.retina = 3)
+```
+
+## Fig 3d, ED Fig 4b
+```{r}
+## Import data
+df_lungs <- read_tsv("../data/FC_lungs.tsv")
+
+## Select variables
+pops_to_plot <- colnames(df_lungs)[1:7]
+
+## Plot
+for (v in pops_to_plot) {
+  
+  label.y_coordinates <- c(rep(max(as.numeric(df_lungs[[v]])) * 1.05, 2), 
+                           max(as.numeric(df_lungs[[v]])) * 1.2)
+  
+  alternative_t_test <- if  (v %in% c("CD11b", "Ly6C", "Ly6G")) "greater" else "less"
+  
+  p_variable <-
+    df_lungs |>
+    ggplot(aes_string(x = "Genotype", fill = "Genotype", y = v)) +
+    geom_boxplot(outlier.shape = NA) +
+    ggbeeswarm::geom_quasirandom(size = 0.75, alpha = 0.6, shape = 21, 
+                               color = "white", fill = "black", stroke = 0.2) +
+    stat_compare_means(method = "t.test", method.args = list(alternative = alternative_t_test),
+                       comparisons = APOE_contrasts_small,
+                       label = "p.format", size = 1.75, label.y = label.y_coordinates) +
+    scale_fill_manual(values = pal_APOE) +
+    guides(x = guide_axis(angle = 60)) +
+    expand_limits(y = c(0, max(as.numeric(df_lungs[[v]])) * 1.3)) +
+    labs(title = gsub("_", " ", v), 
+         y = bquote('Fraction of '~CD45^{textstyle("+")}), 
+         x = "Genotype") +
+    theme_custom2  +
+    theme(legend.position = "none", 
+          title = element_text(size = 7), 
+          axis.text.x = element_text(face = "italic")) +
+    lemon::coord_capped_cart(left = "both", bottom = "both")
+  
+  print(p_variable)
+}
+```
+
+## Fig 3i
+```{r}
+df_tetramer <- read_tsv("../data/FC_tetramer.tsv")
+
+df_tetramer |>
+  ggplot(aes(x = genotype, fill = genotype, y = tetramer)) +
+  geom_boxplot(outlier.shape = NA) +
+  ggbeeswarm::geom_quasirandom(size = 0.75, alpha = 0.6, shape = 21, 
+                             color = "white", fill = "black", stroke = 0.2) +
+  stat_compare_means(method = "t.test", method.args = list(var.equal = FALSE), 
+                     comparisons = APOE_contrasts,
+                     label = "p.format", size = 1.75, label.y = c(20, 20, 22)) +
+  scale_fill_manual(values = pal_APOE) +
+  guides(x = guide_axis(angle = 60)) +
+  expand_limits(y = c(0, max(as.numeric(df_tetramer$tetramer)) * 1.4)) +
+  labs(title = "Tetramer+", y = "Fraction of CD8+ (%)", x = "Genotype") +
+  theme_custom2  +
+  theme(legend.position = "none", 
+        title = element_text(size = 7), 
+        axis.text.x = element_text(face = "italic")) +
+  lemon::coord_capped_cart(left = "both", bottom = "both")
+```
+
+## ED Fig 4d-f
+```{r}
+## ---------------------------------------------
+## Import data
+## ---------------------------------------------
+df_PB_abs <- read_tsv("../data/FC_PB_abs.tsv")
+df_PB <- read_tsv("../data/FC_PB.tsv")
+
+## ---------------------------------------------
+## ED Fig 4d
+## ---------------------------------------------
+df_PB_abs |>
+  ggplot(aes(x = genotype, fill = genotype, y = CD45)) +
+  geom_boxplot(outlier.shape = NA) +
+  ggbeeswarm::geom_quasirandom(size = 0.75, alpha = 0.6, shape = 21, 
+                             color = "white", fill = "black", stroke = 0.2) +
+  stat_compare_means(method = "t.test", comparisons = APOE_contrasts,
+                     label = "p.format", size = 1.75, label.y = c(3600, 3600, 4000)) +
+  scale_fill_manual(values = pal_APOE) +
+  guides(x = guide_axis(angle = 60)) +
+  expand_limits(y = c(0, 4000)) +
+  labs(title = "CD45+", 
+       y = "Cells per µl", 
+       x = "Genotype") +
+  theme_custom2  +
+  theme(legend.position = "none", 
+        title = element_text(size = 7), 
+        axis.text.x = element_text(face = "italic")) +
+  lemon::coord_capped_cart(left = "both", bottom = "both")
+
+## ---------------------------------------------------------------
+## ED Fig 4e-f
+## ---------------------------------------------------------------
+cell_populations <- colnames(df_PB)[2:8]
+
+for (v in cell_populations) {
+  
+  label.y_coordinates <- c(rep(max(as.numeric(df_PB[[v]])) * 1.05, 2), 
+                           max(as.numeric(df_PB[[v]])) * 1.15)
+  
+  p_variable <-
+    df_PB |>
+    ggplot(aes_string(x = "genotype", fill = "genotype", y = v)) +
+    geom_boxplot(outlier.shape = NA) +
+    ggbeeswarm::geom_quasirandom(size = 0.75, alpha = 0.6, shape = 21, 
+                               color = "white", fill = "black", stroke = 0.2) +
+    stat_compare_means(method = "t.test", comparisons = APOE_contrasts,
+                       label = "p.format", size = 1.75, label.y = label.y_coordinates) +
+    scale_fill_manual(values = pal_APOE) +
+    guides(x = guide_axis(angle = 60)) +
+    expand_limits(y = c(0)) +
+    labs(title = gsub("_", " ", v), 
+         y = "Fraction of CD45+ (%)", 
+         x = "Genotype") +
+    theme_custom2  +
+    theme(legend.position = "none", 
+          title = element_text(size = 7), 
+          axis.text.x = element_text(face = "italic")) +
+    lemon::coord_capped_cart(left = "both", bottom = "both")
+  print(p_variable)
+}
+```
+
+## Session info
+```{r}
+devtools::session_info()
+```

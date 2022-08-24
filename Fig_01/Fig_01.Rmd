@@ -1,0 +1,558 @@
+---
+title: "01_Fig01"
+author: "Benjamin Ostendorf"  
+date: "8/8/2022"
+output: rmarkdown::github_document
+---
+
+## Preamble
+```{r, message=FALSE, warning=FALSE}
+library(survival)
+library(survminer)
+library(survivalAnalysis)
+library(forestmodel)
+library(ggpubr)
+library(RColorBrewer)
+library(patchwork)
+library(ggbeeswarm)
+library(lemon)
+library(tidyverse)
+
+source("../auxiliary/helper_functions.R")
+knitr::opts_chunk$set(fig.retina = 3)
+```
+
+## Import and wrangle
+```{r}
+df_APOE <- read_tsv("../data/murine_COVID19.tsv")
+
+df_APOE_males <- 
+  df_APOE |>
+  filter(sex == "male")
+
+df_APOE_females <- 
+  df_APOE |>
+  filter(sex == "female")
+
+df_weights <-
+  df_APOE |>
+  select(-day, -outcome, -age_binary) |>
+  pivot_longer(cols = -c(genotype, sex, age_at_inf, UID), 
+               names_to = "day", values_to = "rel_weight") |>
+  mutate(day = as.double(day))
+
+df_noninf <- read_tsv("../data/murine_noninf.tsv")
+```
+
+## Fig 1a-d
+```{r}
+## -----------------------------------------------
+## Fig 1a
+## -----------------------------------------------
+coxph(Surv(day, outcome) ~ genotype + age_at_inf + sex, 
+      data = mutate(df_APOE, genotype = relevel(factor(genotype), ref = "APOE3")))
+
+fm_APOE_all_df <- 
+  df_APOE |>
+  mutate(genotype = relevel(factor(genotype), ref = "APOE3")) |> 
+  rename(Age = age_at_inf, 
+         Sex = sex, 
+         Genotype = genotype)
+
+fm_APOE_all <-
+  forest_model(
+    coxph(Surv(day, outcome) ~ Age + Sex + Genotype, data = fm_APOE_all_df),
+    format_options =
+      forest_model_format_options(text_size = 1.66, point_size = 1, banded = TRUE), 
+    factor_separate_line = TRUE, 
+    panels = custom_fm_panels, 
+    recalculate_width = FALSE)  +
+  theme_custom2 +
+  labs(title = "Multivariate analysis") +
+  NULL
+
+## Extract exact p values for Cox PH model
+fm_APOE_all_res <- coxph(Surv(day, outcome) ~ Age + Sex + Genotype, data = fm_APOE_all_df)
+p_vals_APOE_all <- as.matrix(coef(summary(fm_APOE_all_res))[,5])
+format.pval(p_vals_APOE_all, digits = 2)
+
+## -----------------------------------------------
+## Fig 1b
+## -----------------------------------------------
+fit_APOE_all_age <- survfit(Surv(day, outcome) ~ age_binary, 
+                            data = df_APOE)
+surv_APOE_all_age <-
+  ggsurvplot(fit_APOE_all_age,
+             palette = as.character(yarrr::piratepal("southpark")[1:2]),
+             ggtheme = theme_custom2,
+             pval = TRUE, pval.size = 1.75, size = 0.5, censor.size = 3, 
+             legend.labs = gsub("age_binary=", "", names(fit_APOE_all_age$strata)),
+             title = "Age")$plot + 
+  labs(x = "Day") +
+  scale_x_continuous(breaks = scales::pretty_breaks()) +
+  theme(legend.position = c(0.8, 0.2), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.1),
+        legend.spacing.x = unit(0.1, "char"), 
+        legend.spacing.y = unit(0.1, "char")) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left")
+
+## Extract exact p value
+format.pval(surv_pvalue(fit_APOE_all_age)[2], digits = 2)
+
+## -----------------------------------------------
+## Fig 1c
+## -----------------------------------------------
+fit_APOE_all_sex <- survfit(Surv(day, outcome) ~ sex, data = df_APOE)
+
+surv_APOE_all_sex <-
+  ggsurvplot(fit_APOE_all_sex,
+             palette = pal_sex,
+             ggtheme = theme_custom2,
+             pval = TRUE, pval.size = 1.75, size = 0.5, censor.size = 3, 
+             legend.labs = gsub("sex=", "", names(fit_APOE_all_sex$strata)),
+             title = "Sex")$plot + 
+  labs(x = "Day") +
+  scale_x_continuous(breaks= scales::pretty_breaks()) +
+  theme(legend.position = c(0.8, 0.2), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.1),
+        legend.spacing.x = unit(0.1, "char"), 
+        legend.spacing.y = unit(0.1, "char")) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left")
+
+## Extract exact p value
+format.pval(surv_pvalue(fit_APOE_all_sex)[2], digits = 2)
+
+## -----------------------------------------------
+## Fig 1d
+## -----------------------------------------------
+fit_APOE_all_genotype <- survfit(Surv(day, outcome) ~ genotype, 
+                            data = df_APOE)
+surv_APOE_all_genotype <-
+  ggsurvplot(fit_APOE_all_genotype,
+             palette = pal_APOE,
+             ggtheme = theme_custom2,
+             pval = TRUE, pval.size = 1.75, size = 0.5, censor.size = 3, 
+             legend.labs = gsub("genotype=", "", names(fit_APOE_all_genotype$strata)),
+             title = expression(paste(italic("APOE"), " genotype")))$plot + 
+  labs(x = "Day") +
+  scale_x_continuous(breaks= scales::pretty_breaks()) +
+  theme(legend.position = c(0.8, 0.2), 
+        legend.text = element_text(face = "italic"), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.1),
+        legend.spacing.x = unit(0.1, "char"), 
+        legend.spacing.y = unit(0.1, "char")) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left")
+
+## Extract exact p value
+format.pval(surv_pvalue(fit_APOE_all_genotype)[2], digits = 2)
+```
+
+## Fig 1e-n
+```{r}
+for (group in (c("female", "male"))) {
+  
+  df_filt <- filter(df_APOE, sex == {{group}})
+  
+  ## -----------------------------------------------
+  ## Fig 1e,j
+  ## -----------------------------------------------
+  assign(paste0("age_APOE_", group), 
+    df_filt |>
+    ggplot(aes(x = genotype, y = age_at_inf, fill = genotype)) +
+    geom_bar(stat = "summary", fun = "mean", width = 0.7) +
+    geom_quasirandom(size = 0.75, alpha = 0.4, shape = 21, 
+                     color = "white", fill = "black", stroke = 0.2) +
+    stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.2) +
+    stat_compare_means(method = "kruskal.test", label = "p.format", 
+                       size = 1.75, label.x = 1.5, label.y = 48) + 
+    scale_fill_manual(values = pal_APOE) +
+    scale_color_manual(values = pal_APOE) +
+    expand_limits(y = c(0, 50)) +
+    labs(y = "Age at infection (weeks)", x = "Genotype", title = "Age") +
+    theme(legend.position = "none", 
+          axis.text.x = element_text(face = "italic")) +
+    guides(x = guide_axis(angle = 60)) +
+    theme_custom2 +
+    lemon::coord_capped_cart(bottom = 'both', left = 'bottom')
+  )
+    
+  ## -----------------------------------------------
+  ## Fig 1f,k
+  ## -----------------------------------------------
+  assign(paste0("weight_APOE_", group), 
+         
+         df_weights |>
+           filter(sex == {{group}}) |>
+           filter(day <= 10) |>
+           filter(genotype %in% APOE_groups) |>
+           ggplot(aes(x = day, y = rel_weight, color = genotype)) +
+           stat_summary(aes(color = genotype), geom = "errorbar",
+                        fun.data = "mean_se",
+                        size = 0.25, width = 0.25) +
+           stat_summary(aes(color = genotype), fun = "mean", size = 0.01) +
+           geom_smooth(se = FALSE, size = 0.25) +
+           theme_custom2 +
+           expand_limits(y = c(70, 100)) +
+           scale_color_manual(values =  pal_APOE) +
+           scale_x_continuous(breaks = scales::pretty_breaks()) +
+           labs(y = "Weight (% of weight on d0)", x = "Day", 
+                 title = "Weight") +
+           theme(legend.position = c(0.25, 0.2), 
+                 legend.background = element_blank(), 
+                 legend.key = element_rect(fill = NA, colour = NA, size = 0.25), 
+                 legend.text = element_text(face = "italic"), 
+                 legend.spacing.x = unit(0.1, "char")) +
+           lemon::coord_capped_cart(bottom = 'left', left = 'both')
+         )
+  
+  ## -----------------------------------------------
+  ## Fig 1g,l
+  ## -----------------------------------------------
+  assign(paste0("bar_APOE_", group), 
+    df_weights |>
+    filter(genotype %in% APOE_groups & day == 4 & sex == {{group}}) |>
+    ggplot(aes(x = genotype, y = rel_weight - 100, fill = genotype)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_quasirandom(size = 0.75, alpha = 0.3, shape = 21, 
+                     color = "white", fill = "black", stroke = 0.2) +
+    geom_hline(yintercept = 0, lty = "11", size = 0.25) +
+    stat_compare_means(method = "t.test", comparisons = APOE_contrasts, 
+                       label = "p.format", size = 1.5, label.y = c(3.5, 3.5, 7)) +
+    theme_custom2 +
+    expand_limits(y = c(-30, 10)) +
+    scale_fill_manual(values = pal_APOE) +
+    theme(legend.position = "none", 
+          axis.text.x = element_text(face = "italic"), 
+          axis.text.y = element_text(size = 5)) +
+    guides(x = guide_axis(angle = 60)) +
+    labs(y = "Weight (% relative to d0)", x = "Genotype", title = "Weight (d4)") +
+    lemon::coord_capped_cart(left = 'bottom', bottom = "both")
+  )
+  
+  ## -----------------------------------------------
+  ## Fig 1h,m
+  ## -----------------------------------------------
+  fit_APOE_sex <- survfit(formula = Surv(day, outcome) ~ genotype, data = df_filt)
+  
+  assign(paste0("surv_APOE_", group), 
+    ggsurvplot(fit_APOE_sex,
+               palette = pal_APOE,
+               ggtheme = theme_custom2,
+               pval = TRUE, pval.size = 1.75, size = 0.5, 
+               censor.size = 3, pval.coord = c(max(fit_APOE_sex$time)*0.7, 0.15), 
+               legend.labs = gsub("genotype=", "", names(fit_APOE_sex$strata)), 
+               title = "Survival")$plot + 
+    labs(x = "Day") +
+    scale_x_continuous(breaks= scales::pretty_breaks()) +
+    theme(legend.position = c(0.2, 0.25), 
+          legend.text = element_text(face = "italic"), 
+          legend.background = element_blank(), 
+          legend.spacing.x = unit(0.01, "char"),
+          legend.key = element_rect(fill = NA, colour = NA, size = unit(0.25, "line")),
+          legend.key.height = unit(0.001, "char")
+          ) +
+    guides(color = guide_legend(override.aes = list(shape = NA))) +
+    coord_capped_cart(left = "both", bottom = "left")
+  )
+  
+  ## -----------------------------------------------
+  ## Fig 1i,n
+  ## ----------------------------------------------- 
+  fm_APOE_sex_df <- 
+    df_filt |>
+    mutate(genotype = relevel(factor(genotype), ref = "APOE3")) |> 
+    rename(Age = age_at_inf, 
+           Sex = sex, 
+           Genotype = genotype)
+  
+  assign(paste0("fm_APOE_", group),  
+    forest_model(
+      coxph(Surv(day, outcome) ~ Genotype, data = fm_APOE_sex_df),
+      format_options =
+        forest_model_format_options(text_size = 1.66, point_size = 1, banded = TRUE), 
+      factor_separate_line = TRUE, 
+      panels = custom_fm_panels, 
+      recalculate_width = FALSE)  +
+    theme_custom2 +
+    NULL
+  )
+}
+
+## Extract exact p values for Cox PH model for males
+coxph_male_res <- coxph(Surv(day, outcome) ~ genotype, 
+                        data = filter(df_APOE, sex == "male") |>
+                          mutate(genotype = relevel(factor(genotype), ref = "APOE3")))
+p_vals_APOE_male <- as.matrix(coef(summary(coxph_male_res))[,5])
+format.pval(p_vals_APOE_male, digits = 1)
+```
+
+## Assemble Fig 1
+```{r}
+
+des_fig_large <- "
+##################
+AAAAAABBBCCCCDDDDD
+AAAAAABBBCCCCDDDDD
+AAAAAABBBCCCCDDDDD
+AAAAAABBBCCCCDDDDD
+AAAAAABBBCCCCDDDDD
+##################
+EEFFFFJJKKKKLLLLLL
+EEFFFFJJKKKKLLLLLL
+EEFFFFJJKKKKLLLLLL
+EEFFFFJJKKKKLLLLLL
+EEFFFFJJKKKKLLLLLL
+##################
+MMNNNNOOPPPPQQQQQQ
+MMNNNNOOPPPPQQQQQQ
+MMNNNNOOPPPPQQQQQQ
+MMNNNNOOPPPPQQQQQQ
+MMNNNNOOPPPPQQQQQQ
+"
+fm_APOE_all + surv_APOE_all_age + surv_APOE_all_sex + surv_APOE_all_genotype +
+  age_APOE_male +   weight_APOE_male +   bar_APOE_male +   surv_APOE_male  +  fm_APOE_male +
+  age_APOE_female + weight_APOE_female + bar_APOE_female + surv_APOE_female + fm_APOE_female +
+  plot_layout(nrow = 1, design = des_fig_large) + 
+  plot_annotation(tag_levels = "a") &
+  theme(plot.tag = element_text(size = 8, face = "bold"))
+```
+
+## ED Fig 1
+```{r}
+## -----------------------------------------------
+## ED Fig 1a
+## -----------------------------------------------
+age_all <- 
+  df_APOE |>
+  ggplot(aes(y = age_at_inf, x = "")) +
+  geom_boxplot(outlier.shape = NA, fill = "grey80") +
+  geom_quasirandom(size = 0.5, alpha = 0.5, shape = 16) +
+  labs(y = "Age at infection (weeks)", title = "Age at infection", x = "") +
+  expand_limits(y = c(10, 50)) +
+  theme(legend.position = "none", 
+        axis.text.x = element_text(face = "italic"), 
+        axis.line.x = element_blank()) +
+  guides(x = guide_axis(angle = 60)) +
+  theme_custom2 +
+  lemon::coord_capped_cart(left = 'both')
+
+## -----------------------------------------------
+## ED Fig 1b
+## -----------------------------------------------
+barplot_sex_all <-
+  ggplot(df_APOE, aes(x = "", fill = sex)) +
+  geom_bar(position = "fill") +
+  theme_custom2 +
+  guides(x = guide_axis(angle = 45)) +
+  labs(x = "", y = "Fraction", title = "Sex") +
+  scale_fill_manual(values = pal_sex) +
+  theme(axis.text.x = element_text(face = "italic"),
+        legend.spacing.x = unit(0.1, "char"),
+        legend.margin=margin(-50,0,-10,-10),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.25),
+        axis.line.x = element_blank()) +
+  coord_capped_cart(left = "both")
+
+## -----------------------------------------------
+## ED Fig 1c
+## -----------------------------------------------
+barplot_genotype_all <-
+  ggplot(df_APOE, aes(x = "", fill = genotype)) +
+  geom_bar(position = "fill") +
+  theme_custom2 +
+  guides(x = guide_axis(angle = 45)) +
+  labs(x = "", y = "Fraction", title = "Genotype") +
+  scale_fill_manual(values = pal_APOE) +
+  theme(axis.text.x = element_text(face = "italic"),
+        legend.spacing.x = unit(0.1, "char"),
+        legend.margin=margin(-50, -5,-10,-10),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.25),
+        legend.text = element_text(face = "italic"), 
+        axis.line.x = element_blank()) +
+  coord_capped_cart(left = "both")
+
+## -----------------------------------------------
+## Assemble ED Fig 1a-c
+## -----------------------------------------------
+age_all + barplot_sex_all + barplot_genotype_all +
+  plot_layout(nrow = 1, widths = c(3, 1, 1)) +
+  plot_annotation(tag_levels = "a") & 
+  theme(plot.tag = element_text(size = 8, face = "bold"))
+
+## ----------------------------------------------------------
+## ED Fig 1d
+## ----------------------------------------------------------
+for (group in (c("female", "male"))) {
+  
+  for (genotype_group in c("APOE2", "APOE3", "APOE4")) {
+    
+    df_filt <- filter(df_weights, 
+                      sex == {{group}}, 
+                      genotype == {{genotype_group}}, 
+                      !is.na(rel_weight))
+    
+    linecolor_custom <- ifelse(genotype_group == "APOE2", pal_APOE[1], 
+                               ifelse(genotype_group == "APOE3", pal_APOE[2], pal_APOE[3]))
+    
+    ## Weight loss individually
+    ## -----------------------------------------------
+    assign(paste0("weight_", group, "_",genotype_group, "_indiv"), 
+           df_filt |>
+           ggplot(aes(x = day, y = rel_weight, color = genotype, group = UID)) +
+           geom_path(alpha = 0.5) +
+           geom_point(size = 0.01, alpha = 0.5) +
+           scale_color_manual(values = linecolor_custom) +
+             expand_limits(y = c(70, 110)) +
+           theme_custom2 +
+           theme(legend.position = "none", 
+                 legend.background = element_blank(), 
+                 legend.key = element_rect(fill = NA, colour = NA, size = 0.25,), 
+                 legend.spacing.x = unit(0.1, "char"), 
+                 legend.text = element_text(face = "italic"), 
+                 plot.title = element_text(face = "italic")) +
+           lemon::coord_capped_cart(bottom = 'left', left = 'both') +
+           labs(y = "Weight (% of weight on d0)", x = "Day", title = genotype_group)) +
+           NULL
+  }
+}
+des_fig_individual_weight <- "
+ABC
+DEF
+"
+weight_male_APOE2_indiv + weight_male_APOE3_indiv + weight_male_APOE4_indiv +
+  weight_female_APOE2_indiv + weight_female_APOE3_indiv + weight_female_APOE4_indiv + 
+  plot_layout(nrow = 2, design = des_fig_individual_weight) + 
+  plot_annotation(tag_levels = "a") &
+  theme(plot.tag = element_text(size = 8, face = "bold"))
+
+## --------------------------------------------------------------------------
+## ED Fig 1e-f
+## --------------------------------------------------------------------------
+coxph(Surv(day, outcome) ~ age_at_inf + sex + genotype + 
+        age_at_inf*genotype + sex*genotype, 
+      data = mutate(df_APOE, genotype = relevel(factor(genotype), ref = "APOE3")))
+
+tbl_interactions <- 
+  fm_APOE_all_df |>
+  coxph(formula = Surv(day, outcome) ~ Age + Sex + Genotype + Age*Genotype + Sex*Genotype) |>
+  gtsummary::tbl_regression()
+plot(tbl_interactions)
+
+## -------------------------------------------------------
+## ED Fig 1g-h
+## -------------------------------------------------------
+for (group in (c("< 30 weeks", "> 30 weeks"))) {
+  
+  age_descriptor <- ifelse(group == "< 30 weeks", "young", "old")
+  df_filt <- filter(df_APOE, age_binary == {{group}})
+  fit_APOE_age <- survfit(formula = Surv(day, outcome) ~ genotype, data = df_filt)
+  
+  assign(paste0("surv_APOE_", age_descriptor), 
+    ggsurvplot(fit_APOE_age,
+               palette = pal_APOE,
+               ggtheme = theme_custom2,
+               pval = TRUE, pval.size = 1.75, size = 0.5, 
+               censor.size = 3, pval.coord = c(max(fit_APOE_age$time)*0.7, 0.15), 
+               legend.labs = gsub("genotype=", "", names(fit_APOE_age$strata)), 
+               title = "Survival")$plot + 
+    labs(x = "Day") +
+    scale_x_continuous(breaks= scales::pretty_breaks()) +
+    theme(legend.position = c(0.2, 0.25), 
+          legend.text = element_text(face = "italic"), 
+          legend.background = element_blank(), 
+          legend.spacing.x = unit(0.01, "char"), 
+          legend.key = element_rect(fill = NA, colour = NA, size = unit(0.25, "line")),
+          legend.key.height = unit(0.001, "char") 
+          ) +
+    guides(color = guide_legend(override.aes = list(shape = NA))) +
+    coord_capped_cart(left = "both", bottom = "left")
+  )
+}
+surv_APOE_young + surv_APOE_old
+```
+
+## ED Fig 1i-k
+```{r}
+## -----------------------------------------------
+## ED Fig 1i
+## -----------------------------------------------
+age_APOE_noninf <- 
+  df_noninf |>
+  ggplot(aes(x = genotype, y = age_at_start, fill = genotype)) +
+  geom_bar(stat = "summary", fun = "mean", width = 0.7) +
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.2) +
+  stat_compare_means(method = "kruskal.test", label = "p.format", 
+                     size = 1.75, label.x = 2) + 
+  geom_quasirandom(size = 1, width = 0.2, alpha = 0.5, shape = 16) +
+  scale_fill_manual(values = pal_APOE) +
+  scale_color_manual(values = pal_APOE) +
+  expand_limits(y = c(0, 40)) +
+  labs(y = "Age at infection (weeks)", x = "Genotype", title = "Age") +
+  theme(legend.position = "none", 
+        axis.text.x = element_text(face = "italic"), 
+        axis.line.x = element_blank()) +
+  guides(x = guide_axis(angle = 60)) +
+  theme_custom2 +
+  lemon::coord_capped_cart(left = 'bottom')
+
+## -----------------------------------------------
+## ED Fig 1j
+## -----------------------------------------------
+barplot_sex_noninf <-
+  ggplot(df_noninf, aes(x = genotype, fill = sex)) +
+  geom_bar(position = "fill", width = 0.7) +
+  theme_custom2 +
+  guides(x = guide_axis(angle = 60)) +
+  labs(x = "Genotype", y = "Fraction", title = "Sex") +
+  scale_fill_manual(values = pal_sex) +
+  theme(axis.text.x = element_text(face = "italic"),
+        legend.spacing.x = unit(0.1, "char"),
+        legend.margin=margin(-4, 1, 1, 1), 
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.25),
+        axis.line.x = element_blank(),
+        legend.position = c(0.7, 0.85)) +
+  coord_capped_cart(left = "both")
+chisq.test(df_noninf$genotype, df_noninf$sex)
+
+## -----------------------------------------------
+## ED Fig 1k
+## -----------------------------------------------
+fit_APOE_noninf <- survfit(Surv(day, outcome) ~ genotype, 
+                            data = df_noninf)
+surv_APOE_noninf <-
+  ggsurvplot(fit_APOE_noninf,
+             palette = pal_APOE,
+             ggtheme = theme_custom2,
+             pval = TRUE, pval.size = 1.75, size = 0.5, censor.size = 3, 
+             legend.labs = gsub("genotype=", "", names(fit_APOE_all_genotype$strata)),
+             title = expression(paste(italic("APOE"), " genotype")))$plot + 
+  labs(x = "Day") +
+  scale_x_continuous(breaks= scales::pretty_breaks()) +
+  theme(legend.position = c(0.8, 0.2), 
+        legend.text = element_text(face = "italic"), 
+        legend.background = element_blank(),
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.1),
+        legend.spacing.x = unit(0.1, "char"), 
+        legend.spacing.y = unit(0.1, "char")) +
+  guides(color = guide_legend(override.aes = list(shape = NA))) +
+  coord_capped_cart(left = "both", bottom = "left")
+
+## -----------------------------------------------
+## Assemble ED Fig 1i-k
+## -----------------------------------------------
+age_APOE_noninf + barplot_sex_noninf + surv_APOE_noninf +
+  plot_layout(nrow = 1, widths = c(1, 1, 2)) +#, design = fig_design) + 
+  plot_annotation(tag_levels = "a") &
+  theme(plot.tag = element_text(size = 8, face = "bold"))
+```
+
+## Session info
+```{r}
+devtools::session_info()
+```

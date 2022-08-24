@@ -1,0 +1,235 @@
+---
+title: "scRNAseq of dissociated lungs of APOE knock-in mice"
+author: "Benjamin Ostendorf"
+date: '2022-08-08'
+output: rmarkdown::github_document
+---
+
+## Preamble
+```{r, message=FALSE, warning=FALSE}
+library(Seurat)
+library(Matrix)
+library(ggpubr)
+library(clusterProfiler)
+library(ReactomePA)
+library(org.Mm.eg.db)
+library(msigdbr)
+library(ggrastr)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(tidyverse)
+
+source("../../auxiliary/helper_functions.R")
+source("subscripts/scRNAseq_aux.R")
+knitr::opts_chunk$set(fig.retina = 3)
+```
+
+## Load data (output from Parse Biosciences pipeline)
+The required input files can be downloaded from GEO repository [GSE199498](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE199498). 
+```{r}
+if (!file.exists("../../data/scRNAseq/Seurat.RDS")) {
+  
+  ## Data import and wrangling
+  source("subscripts/import_data.R")
+ 
+  ## Seurat workflow
+  source("subscripts/subset_Seurat.R")
+}
+df <- readRDS("../../data/scRNAseq/Seurat.RDS")
+```
+
+## Cell annotation and subclustering
+```{r}
+## Rename clusters
+source("subscripts/rename_clusters.R")
+
+## Subclustering lymphocytes and reorder clusters
+source("subscripts/subclustering_T_cells.R")
+
+saveRDS(df, "../../data/scRNAseq/seurat_processed.RDS")
+```
+
+## Determine DEGs
+```{r}
+cluster.averages <- AverageExpression(object = df, return.seurat = TRUE)
+
+if (!file.exists("../../data/scRNAseq/diff_markers.RDS")) {
+  markers <- FindAllMarkers(df, only.pos = TRUE, min.pct = 0.25)
+  saveRDS(markers, "../../data/scRNAseq/diff_markers.RDS")
+}
+```
+
+## Filter dataset and define subsets
+```{r}
+if (!file.exists("../../data/scRNAseq/df_filt.RDS")){
+  source("subscripts/filter_data.R")
+}
+df_filt <- readRDS("../../data/scRNAseq/df_filt.RDS")
+df_filt.averages <- AverageExpression(df_filt, return.seurat = TRUE)
+
+## Define df subsets
+source("subscripts/subset_data.R")
+```
+
+## ED Fig 5
+```{r}
+## -----------------------------------------------
+## ED Fig 5a
+## -----------------------------------------------
+tibble(sample = names(table(df_filt@meta.data$sample))) |>
+  mutate(condition = case_when(grepl("ctrl", sample) ~ "Non-infected", 
+                               grepl("inf", sample) ~ "Infected"), 
+         genotype = case_when(grepl("E2", sample) ~ "APOE2", 
+                              grepl("E3", sample) ~ "APOE3", 
+                              grepl("E4", sample) ~ "APOE4")) |>
+  mutate(condition = ordered(condition, levels = c("Non-infected", "Infected"))) |>
+  ggplot(aes(x = condition, fill = genotype)) +
+  geom_bar(position = position_dodge2(width = 0.7, preserve = "single")) +
+  theme_custom2 +
+  scale_fill_manual(values = pal_APOE) +
+  guides(x = guide_axis(angle = 60)) +
+  expand_limits(y = 8) +
+  labs(title = "Samples for scRNA-seq", y = "Number of samples") +
+  theme(legend.text = element_text(face = "italic"), 
+        axis.title.x = element_blank(), 
+        legend.spacing.x = unit(0.1, "char"), 
+        legend.background = element_blank(), 
+        legend.key = element_rect(fill = NA, colour = NA, size = 0.25), 
+        legend.position = c(0.25, 0.92))
+
+## -----------------------------------------------
+## ED Fig 5b
+## -----------------------------------------------
+UMAP_df_filt |>
+  ggplot(aes(x = UMAP_1, y = UMAP_2, color = celltype)) +
+  geom_point_rast(size = 0.1, stroke = 0, shape = 16, raster.dpi = 600) +
+  theme_minimal() +
+  theme(panel.border = element_rect(size = custom_linewidth, fill = NA),
+        panel.grid = element_blank(),
+        axis.title = element_text(size = 6),
+        axis.text = element_blank(),
+        plot.title = element_text(size = 6),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 5),
+        legend.key.size = unit(0.4, "line"),
+        strip.text.x = element_text(size = 6)) +
+  scale_colour_manual(values =c(RColorBrewer::brewer.pal(7, "Greens"), # myeloid
+                                "Blue",  # DCs
+                                RColorBrewer::brewer.pal(6, "RdPu"), # lymphoid
+                                RColorBrewer::brewer.pal(3, "Greys"), # Fibroblasts
+                                RColorBrewer::brewer.pal(6, "Reds"), # ECs
+                                RColorBrewer::brewer.pal(7, "Blues"),  
+                                "black"), 
+                      aesthetics = c("fill", "colour")) +
+  guides(color = guide_legend(override.aes = list(size = 2.5))) +
+  xlab("UMAP dim. 1") +
+  ylab("UMAP dim. 2")
+
+## -----------------------------------------------
+## ED Fig 5c
+## -----------------------------------------------
+DoHeatmap(object = df_filt.averages, 
+          features = unlist(lineage_markers_lung), draw.lines = FALSE, label = FALSE, 
+          size = 2, raster = FALSE, group.bar = TRUE, group.bar.height = 0.005) +
+  scale_fill_gradientn(colors = colorRampPalette(c("navy", "white", "firebrick3"))(50)) +
+  xlab(label = colnames(cluster.averages)) +
+  theme(axis.text.x = element_text(size = 5, angle = 45, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = 5, face = "italic"),
+        axis.title = element_blank(),
+        legend.position = "none")
+
+## -----------------------------------------------
+## ED Fig 5d
+## -----------------------------------------------
+markers <-
+  readRDS("../../data/scRNAseq/diff_markers.RDS") |> 
+  slice(order(factor(cluster, levels = levels_clusters))) |>
+  as_tibble()
+
+markers_by_cluster_df_filt <- 
+  markers |>
+  group_by(cluster) |>
+  filter(!grepl("misc", cluster)) |>
+  slice_max(n = 3, order_by = avg_log2FC)
+
+DoHeatmap(object = df_filt.averages, 
+          features = markers_by_cluster_df_filt$gene, draw.lines = FALSE, 
+          size = 2, raster = FALSE, group.bar = TRUE, group.bar.height = 0.005) +
+  scale_fill_gradientn(colors = colorRampPalette(c("navy", "white", "firebrick3"))(50)) +
+  xlab(label = colnames(df_filt.averages)) +
+  theme(axis.text.x = element_text(size = 5, angle = 60, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = 5, face = "italic"),
+        axis.title = element_blank(),
+        legend.position = "none")
+```
+
+## ED Fig 6
+```{r}
+## ----------------------------------------------------------
+## ED Fig 6a
+## ----------------------------------------------------------
+subset_prop_all <- 
+  as.data.frame(prop.table(x = table(df_filt$celltype_grouped, df_filt$sample), 
+                           margin = 2) * 100) |>
+  annotate_prop_df()
+
+subset_prop_all |>
+  plot_cell_prop(x = condition, y = Freq, fill = condition, facet_var = "celltype", 
+                 comparisons = list(c("inf", "ctrl")), x_axis_face = "plain", 
+                 fill_pal = RColorBrewer::brewer.pal(8, "Dark2")[1:2], nrow = 3)
+
+## ----------------------------------------------------------
+## ED Fig 6b
+## ----------------------------------------------------------
+subset_prop_immune_inf <- 
+  as.data.frame(prop.table(x = table(df_immune_inf$celltype_grouped, df_immune_inf$sample), 
+                           margin = 2) * 100) |>
+  annotate_prop_df()
+
+subset_prop_immune_inf |>
+  plot_cell_prop(x = genotype, y = Freq, fill = genotype, 
+                 facet_var = "celltype", 
+                 comparisons = APOE_contrasts_E3, 
+                 ylab = "Fraction of immune cells (%)", nrow = 3)
+
+## ----------------------------------------------------------
+## ED Fig 6c
+## ----------------------------------------------------------
+subset_prop_nonimmune_inf <- 
+  as.data.frame(prop.table(x = table(df_nonimmune_inf$celltype_grouped, df_nonimmune_inf$sample), 
+                           margin = 2) * 100) |>
+  annotate_prop_df()
+
+subset_prop_nonimmune_inf |>
+  plot_cell_prop(x = genotype, y = Freq, fill = genotype, 
+                 facet_var = "celltype", 
+                 comparisons = APOE_contrasts_E3, 
+                 ylab = "Fraction of non-immune cells (%)", nrow = 3)
+```
+
+## Fig 3e-g
+```{r}
+## ----------------------------------------------------------
+## Fig 3e
+## ----------------------------------------------------------
+plot_density(UMAP_df_filt, "condition")
+
+## ----------------------------------------------------------
+## Fig 3f
+## ----------------------------------------------------------
+plot_density(UMAP_inf, "genotype")
+
+## ----------------------------------------------------------
+## Fig 3g
+## ----------------------------------------------------------
+## Calculate DGEAs for grouped clusters
+source("subscripts/DGEA.R")
+
+## Perform GSEA and plot
+source("subscripts/GSEA_analysis.R")
+```
+
+## Session info
+```{r}
+devtools::session_info()
+```
