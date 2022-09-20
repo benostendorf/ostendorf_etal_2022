@@ -6,7 +6,7 @@ Benjamin N. Ostendorf†, Mira A. Patel, Jana Bilanovic, H.-Heinrich Hoffmann, S
 
 †*Correspondence*: bostendorf@rockefeller.edu, stavazoie@rockefeller.edu  
 
-*doi*: 10.1038/s41586-022-05344-2
+*doi*: [10.1038/s41586-022-05344-2](https://doi.org/10.1038/s41586-022-05344-2)
 
 ### Overview
 | Figures                                             | Code file                                                    | R markdown output                                            |
