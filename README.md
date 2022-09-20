@@ -2,9 +2,9 @@
 
 This repository contains the code to reproduce all figures from the manuscript
 ## Common human genetic variants of *APOE* impact murine COVID-19 mortality, Nature, 2022
-Benjamin N. Ostendorf*, Mira A. Patel, Jana Bilanovic, H.-Heinrich Hoffmann, Sebastian E. Carrasco, Charles M. Rice, Sohail F. Tavazoie*  
-**Correspondence*: bostendorf@rockefeller.edu, stavazoie@rockefeller.edu  
-*doi*: link-to-doi 
+Benjamin N. Ostendorf†, Mira A. Patel, Jana Bilanovic, H.-Heinrich Hoffmann, Sebastian E. Carrasco, Charles M. Rice, Sohail F. Tavazoie†
+†*Correspondence*: bostendorf@rockefeller.edu, stavazoie@rockefeller.edu  
+*doi*: 10.1038/s41586-022-05344-2
 
 ### Overview
 | Figures                                             | Code file                                                    | R markdown output                                            |
